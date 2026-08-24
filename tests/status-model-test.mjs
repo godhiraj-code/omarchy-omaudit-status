@@ -4,6 +4,10 @@ import { createRequire } from "node:module"
 const require = createRequire(import.meta.url)
 const Model = require("../StatusModel.js")
 
+assert.equal(Model.shouldPublishScan(4, 4), true)
+assert.equal(Model.shouldPublishScan(4, 5), false)
+assert.equal(Model.shouldPublishScan(-1, -1), false)
+
 function plugin(overrides = {}) {
   const value = {
     id: "example.plugin",

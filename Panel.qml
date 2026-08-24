@@ -14,6 +14,7 @@ BarWidget {
   property var waitingStatus: StatusModel.errorDocument("Waiting for Omaudit Status service")
 
   readonly property var guardService: bar?.shell?.serviceFor("godhiraj.omaudit-status")
+  readonly property var hostBarConfig: bar ? bar.barConfig : null
   readonly property var statusDocument: guardService && guardService.status
     ? guardService.status : waitingStatus
   readonly property string guardState: StatusModel.state(statusDocument)
@@ -63,6 +64,7 @@ BarWidget {
 
   onBarChanged: Qt.callLater(root.configureService)
   onSettingsChanged: Qt.callLater(root.configureService)
+  onHostBarConfigChanged: Qt.callLater(root.configureService)
   onGuardServiceChanged: Qt.callLater(root.configureService)
   onPopupOpenChanged: if (popupOpen) {
     selectedAction = 1

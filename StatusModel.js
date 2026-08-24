@@ -273,6 +273,11 @@ function ipcStatus(document, scanning) {
   })
 }
 
+function shouldPublishScan(activeGeneration, currentGeneration) {
+  return Number.isInteger(activeGeneration) && Number.isInteger(currentGeneration)
+    && activeGeneration >= 0 && activeGeneration === currentGeneration
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     zeroTotals: zeroTotals,
@@ -284,6 +289,7 @@ if (typeof module !== "undefined") {
     summary: summary,
     visiblePlugins: visiblePlugins,
     scanTime: scanTime,
-    ipcStatus: ipcStatus
+    ipcStatus: ipcStatus,
+    shouldPublishScan: shouldPublishScan
   }
 }

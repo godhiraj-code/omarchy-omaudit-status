@@ -21,19 +21,32 @@ Item {
   property string _stdout: ""
   property bool _outputOverflow: false
   property bool _startupScanStarted: false
+  property bool _refreshPending: false
+  property int _configurationGeneration: 0
+  property int _activeGeneration: -1
 
   function configure(settings) {
     var configured = settings && settings.refreshIntervalSec !== undefined
       ? Number(settings.refreshIntervalSec) : 900
     if (!isFinite(configured)) configured = 900
-    refreshIntervalSec = Math.max(60, Math.min(3600, Math.round(configured)))
-    includeBuiltins = !!(settings && settings.includeBuiltins === true)
+    var configuredInterval = Math.max(60, Math.min(3600, Math.round(configured)))
+    var configuredBuiltins = !!(settings && settings.includeBuiltins === true)
+    var scopeChanged = includeBuiltins !== configuredBuiltins
+    refreshIntervalSec = configuredInterval
+    includeBuiltins = configuredBuiltins
+    if (scopeChanged) {
+      _configurationGeneration += 1
+      status = StatusModel.errorDocument("Audit scope changed; waiting for a scan using the current settings")
+      if (scanning || scanProcess.running) _refreshPending = true
+      else Qt.callLater(root.refresh)
+    }
   }
 
   function refresh() {
     if (scanning || scanProcess.running || adapterPath === "") return false
     _stdout = ""
     _outputOverflow = false
+    _activeGeneration = _configurationGeneration
     var argv = ["python3", adapterPath]
     if (includeBuiltins) argv.push("--include-builtins")
     scanProcess.command = argv
@@ -63,7 +76,8 @@ Item {
     if (_stdout.length + text.length > maxAdapterOutputChars) {
       _outputOverflow = true
       _stdout = ""
-      status = StatusModel.errorDocument("Omaudit Status adapter output exceeded the size limit")
+      if (StatusModel.shouldPublishScan(_activeGeneration, _configurationGeneration))
+        status = StatusModel.errorDocument("Omaudit Status adapter output exceeded the size limit")
       // Untrusted oversized output is not given an open-ended graceful-exit
       // window. SIGKILL guarantees onExited runs and refreshes cannot wedge.
       if (scanProcess.running) scanProcess.signal(9)
@@ -100,16 +114,20 @@ Item {
     }
 
     onExited: function(exitCode) {
-      if (root._outputOverflow) {
-        root.scanning = false
-        return
+      var resultIsCurrent = StatusModel.shouldPublishScan(root._activeGeneration,
+                                                          root._configurationGeneration)
+      if (resultIsCurrent && !root._outputOverflow) {
+        // A complete minimized document remains authoritative even if a future
+        // adapter uses a non-zero exit. Invalid stdout always fails visibly.
+        var valid = root.applyOutput(root._stdout)
+        if (!valid && exitCode !== 0)
+          root.status = StatusModel.errorDocument("Omaudit Status adapter process failed")
       }
-      // A complete minimized document remains authoritative even if a future
-      // adapter uses a non-zero exit. Invalid stdout always fails visibly.
-      var valid = root.applyOutput(root._stdout)
-      if (!valid && exitCode !== 0)
-        root.status = StatusModel.errorDocument("Omaudit Status adapter process failed")
+      root._stdout = ""
       root.scanning = false
+      var pending = root._refreshPending
+      root._refreshPending = false
+      if (pending) Qt.callLater(root.refresh)
     }
   }
 

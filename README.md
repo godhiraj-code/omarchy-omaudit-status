@@ -73,6 +73,7 @@ omarchy plugin add https://github.com/godhiraj-code/omarchy-omaudit-status --ena
 | Include first-party plugins | Off | Adds `--all` only when enabled |
 
 First-party auditing is off by default because stock Omarchy components legitimately use broad shell capabilities and can obscure third-party drift on an initial review.
+Changing this scope immediately invalidates the previous result. If a scan is already running, its output is discarded and one scan with the new scope is queued.
 
 ## Local development installation
 

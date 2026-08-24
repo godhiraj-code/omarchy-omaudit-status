@@ -16,4 +16,6 @@ Omaudit Status performs no automatic installation, baseline acceptance, pin, rem
 
 Malformed output, missing Omaudit, scan timeouts, and oversized output fail visibly in a non-green UI state. On the supported Omarchy Linux runtime, the adapter streams both pipes concurrently, retaining at most 8 MiB of stdout and 64 KiB of stderr before terminating Omaudit's isolated process group. Saved fixture input has the same 8 MiB ceiling. Adapter JSON is ASCII-safe so Quickshell's arbitrary byte chunks cannot split Unicode code points. The QML service independently consumes output in chunks, retains at most 2 MiB characters of minimized stdout, drains stderr without retaining it, and uses a forced stop after overflow so scanning cannot wedge. These failures are not presented as a clean scan.
 
+The first-party inclusion setting is part of scan identity. Changing it immediately invalidates the visible result. Output from a scan started under an older scope is discarded, and at most one replacement scan is queued after the active process exits.
+
 Before data reaches QML, the adapter strips filesystem paths, full baseline documents, and evidence snippets. The UI receives only the minimized status data needed to explain the result.
