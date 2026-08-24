@@ -1,33 +1,88 @@
 # Omaudit Status
 
-Omaudit Status adds native Omarchy 4/Quattro bar status for [Omaudit](https://github.com/omarchy-forge/omaudit) plugin capability and risk drift. It is a small status and review interface—not another scanner. Omaudit performs the scan and grading; Omaudit Status converts its machine-readable result into a shield indicator and a keyboard-friendly panel.
+[![CI](https://github.com/godhiraj-code/omarchy-omaudit-status/actions/workflows/ci.yml/badge.svg)](https://github.com/godhiraj-code/omarchy-omaudit-status/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> **Important:** capability review is not malware detection. A capability finding says what plugin code can do, or what changed from a reviewed baseline. It does not prove that code is malicious or safe, and Omaudit Status does not sandbox plugins.
+A native Omarchy 4/Quattro bar companion for [Omaudit](https://github.com/omarchy-forge/omaudit). It turns Omaudit's machine-readable plugin audit results into a compact shield indicator and keyboard-friendly review panel.
+
+**Omaudit Status is not another scanner.** Omaudit remains the source of truth for capability discovery, baseline drift, findings, scores and grades.
+
+> Capability findings are review signals, not proof that a plugin is malicious or safe. Omarchy plugins run with the current user's permissions; this project does not sandbox them.
+
+## What it does
+
+- Audits third-party plugins by default through `omaudit check --json`.
+- Includes first-party Omarchy plugins only after explicit opt-in, using `omaudit check --json --all`.
+- Shares one scan service across every monitor instead of launching one scanner per bar widget.
+- Prevents overlapping scans and bounds the data retained by QML.
+- Fails closed when output is malformed, unsupported, contradictory or incomplete.
+- Opens Omaudit's detailed terminal review flow without accepting baselines or changing plugins.
+
+## Status at a glance
+
+| Shield | Meaning |
+| --- | --- |
+| Green | Tracked plugins are unchanged. |
+| Amber | A plugin is not tracked or still needs baseline review. |
+| Red | Capability drift or composition risk needs review. |
+| Dim/error | Omaudit is unavailable, timed out or returned invalid data. |
+
+The popup reports unchanged, changed, not-tracked and composition-risk totals, the worst current grade, and a bounded worst-first plugin list. Aggregate totals still cover the complete scan even when the displayed list is capped.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    O[Omaudit CLI] -->|JSON| A[Python adapter]
+    A -->|validated and minimized document| S[Singleton Quickshell service]
+    S --> W1[Bar widget: monitor 1]
+    S --> W2[Bar widget: monitor 2]
+    S --> P[Bounded review popup]
+```
+
+The adapter invokes Omaudit with a fixed argument vector. Plugin-controlled names, paths and evidence are never interpolated into shell commands.
 
 ## Requirements
 
 - Omarchy 4 with the Quattro shell
+- [Omaudit](https://github.com/omarchy-forge/omaudit) v0.1.0 or newer on `PATH`
 - Python 3.11 or newer
-- Omaudit v0.1.0 or newer
-- Node.js only when running development tests
+- Node.js only for development tests
 
-Omaudit Status does **not** install or update Omaudit. Follow [Omaudit's official installation instructions](https://github.com/omarchy-forge/omaudit#install), review that project and its release source, then confirm `omaudit` is available on your path. No `sudo` or bundled installer is required for Omaudit Status.
+Omaudit Status does not install or update Omaudit. Review and install Omaudit separately using its official documentation before enabling this plugin.
 
 ## Installation
-
-After installing Omaudit, add and enable the plugin through Omarchy:
 
 ```sh
 omarchy plugin add https://github.com/godhiraj-code/omarchy-omaudit-status --enable --yes
 ```
 
+## Usage
+
+- **Click** the shield to open or close the popup.
+- **Middle-click or right-click** the shield to refresh.
+- Press **R** while the popup is open to refresh.
+- Press **Escape** to close the popup.
+- Select **Review in terminal** to open Omaudit's interactive review flow.
+
+### Settings
+
+| Setting | Default | Range/behavior |
+| --- | ---: | --- |
+| Refresh interval | 900 seconds | 60–3600 seconds |
+| Include first-party plugins | Off | Adds `--all` only when enabled |
+
+First-party auditing is off by default because stock Omarchy components legitimately use broad shell capabilities and can obscure third-party drift on an initial review.
+
 ## Local development installation
 
-From a local checkout, the included helper validates the source, refuses to overwrite an existing installation, copies it locally, rescans local plugins, and enables it through Omarchy:
+From a local checkout:
 
 ```sh
 ./scripts/install-local.sh
 ```
+
+The helper validates the source, refuses to overwrite an existing installation, copies it into the local Omarchy plugin directory, rescans local plugins and enables it through Omarchy.
 
 Equivalent manual commands:
 
@@ -40,32 +95,7 @@ omarchy-shell shell rescanPlugins
 omarchy plugin enable godhiraj.omaudit-status --section right
 ```
 
-Instead of copying, you may clone a local Git checkout directly into `~/.config/omarchy/plugins/godhiraj.omaudit-status`. Validate the directory and run `omarchy-shell shell rescanPlugins` before enabling it.
-
-## Usage
-
-- **Click** the shield to open or close the status popup.
-- **Middle-click or right-click** the shield to refresh immediately.
-- Press **`r`** while the popup is open to refresh.
-- Press **Escape** to close the popup.
-- Choose **Review in terminal** to open Omaudit's interactive `omaudit check` review flow. Omaudit Status never accepts a baseline or remediates findings itself.
-
-The panel summarizes changed, not-tracked, unchanged, and composition-risk counts and shows the worst current grade. Missing Omaudit, malformed output, timeouts, and unexpected exits remain visible as non-green errors rather than clean results.
-
-### Settings
-
-- **Refresh interval:** 60–3600 seconds; default 900 seconds.
-- **Include first-party Omarchy plugins:** opt-in; disabled by default.
-
-Third-party plugins are the default because stock Omarchy components legitimately use broad shell capabilities. Including them on the first scan can create noisy results that obscure third-party capability drift.
-
-## Screenshot
-
-The bar icon, bounded popup, keyboard close action, terminal review flow, two-monitor rendering, and green/amber/red visual states were validated on a real Omarchy 4 desktop. Screenshots are intentionally not committed because they included the operator's live desktop context.
-
 ## Removal
-
-Use Omarchy's plugin commands rather than deleting live shell files manually:
 
 ```sh
 ./scripts/remove-local.sh
@@ -78,44 +108,47 @@ omarchy plugin disable godhiraj.omaudit-status
 omarchy plugin remove godhiraj.omaudit-status --yes
 ```
 
-Omaudit is a separate tool and is not removed, installed, or updated by these commands.
+Omaudit is a separate tool and is deliberately left installed.
 
-## Development and verification
-
-From the repository root:
-
-```sh
-# Python adapter and QML contract tests
-python -m unittest discover -s tests -p "test_*.py" -v
-
-# Pure status-model test
-node tests/status-model-test.mjs
-
-# Adapter fixture smoke test; output must be valid JSON
-python scripts/status.py --input tests/fixtures/changed.json | python -m json.tool
-
-# Manifest and fixture JSON validation
-python -m json.tool manifest.json >/dev/null
-for fixture in tests/fixtures/*.json; do python -m json.tool "$fixture" >/dev/null; done
-
-# Official Omarchy plugin validation (run on an Omarchy 4 host)
-omarchy plugin validate .
-```
-
-Node.js is not needed at runtime. The adapter uses only the Python standard library.
-
-## Security and limitations
-
-Omaudit Status and Omaudit run with the current user's permissions; neither is a sandbox. Omaudit Status invokes Omaudit with a fixed argument vector, minimizes the data passed to QML, and does not evaluate plugin-controlled values in a shell.
+## Security boundaries
 
 Omaudit Status has:
 
 - no telemetry or network service;
-- no automatic remediation, plugin disable/removal, or privileged action;
 - no automatic baseline acceptance;
-- no malware-detection claim.
+- no automatic remediation, plugin disable/removal or update behavior;
+- no privileged commands such as `sudo` or `pkexec`;
+- no malware-detection or sandboxing claim.
 
-Read the full [threat model](docs/THREAT_MODEL.md) and [security policy](SECURITY.md) before reporting a vulnerability. Treat grades and drift as review signals, not proof of safety or maliciousness.
+The adapter and QML model independently validate the status document. Malformed dates, contradictory totals, duplicate plugin identities, unsupported grades/statuses and inconsistent evidence fail visibly instead of producing a green state.
+
+Read the [threat model](docs/THREAT_MODEL.md) and [security policy](SECURITY.md) for the complete trust boundary and reporting process.
+
+## Verification
+
+The release artifact was validated with:
+
+- the official Omarchy plugin validator;
+- real Omaudit default and `--all` scans;
+- a real Omarchy 4/Quattro desktop with two monitors;
+- singleton IPC and overlapping-refresh checks;
+- green, amber, red and error-state validation;
+- 26 Python contract and lifecycle tests;
+- adversarial JavaScript status-model tests;
+- Linux shell syntax and Git whitespace checks.
+
+Run the repository checks locally:
+
+```sh
+python -m unittest discover -s tests -p "test_*.py" -v
+node --check StatusModel.js
+node tests/status-model-test.mjs
+bash -n scripts/install-local.sh scripts/remove-local.sh
+python -m json.tool manifest.json >/dev/null
+omarchy plugin validate .
+```
+
+Node.js is not required at runtime. The adapter uses only the Python standard library.
 
 ## License
 
