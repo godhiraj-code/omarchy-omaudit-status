@@ -12,12 +12,14 @@ Item {
   property bool scanning: false
   property int refreshIntervalSec: 900
   property bool includeBuiltins: false
+  readonly property int maxAdapterOutputChars: 2 * 1024 * 1024
 
   readonly property string adapterPath: manifest && manifest.__sourceDir
     ? String(manifest.__sourceDir).replace(/\/$/, "") + "/scripts/status.py"
     : ""
 
   property string _stdout: ""
+  property bool _outputOverflow: false
   property bool _startupScanStarted: false
 
   function configure(settings) {
@@ -31,6 +33,7 @@ Item {
   function refresh() {
     if (scanning || scanProcess.running || adapterPath === "") return false
     _stdout = ""
+    _outputOverflow = false
     var argv = ["python3", adapterPath]
     if (includeBuiltins) argv.push("--include-builtins")
     scanProcess.command = argv
@@ -54,6 +57,21 @@ Item {
     return parsed.valid
   }
 
+  function ingestStdout(chunk) {
+    if (_outputOverflow) return
+    var text = String(chunk || "")
+    if (_stdout.length + text.length > maxAdapterOutputChars) {
+      _outputOverflow = true
+      _stdout = ""
+      status = StatusModel.errorDocument("Omaudit Status adapter output exceeded the size limit")
+      // Untrusted oversized output is not given an open-ended graceful-exit
+      // window. SIGKILL guarantees onExited runs and refreshes cannot wedge.
+      if (scanProcess.running) scanProcess.signal(9)
+      return
+    }
+    _stdout += text
+  }
+
   onManifestChanged: Qt.callLater(root.startupScan)
   Component.onCompleted: Qt.callLater(root.startupScan)
 
@@ -69,23 +87,26 @@ Item {
     running: false
     command: []
 
-    stdout: StdioCollector {
-      id: scanStdout
-      waitForEnd: true
-      onStreamFinished: root._stdout = text
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) { root.ingestStdout(chunk) }
     }
 
-    // Drain stderr separately so it cannot leak into the status document or
-    // the shell's inherited output. Omaudit Status intentionally never renders it.
-    stderr: StdioCollector {
-      id: scanStderr
-      waitForEnd: true
+    // Drain and discard stderr chunk-by-chunk. It never enters a retained QML
+    // buffer, the status document, or the shell's inherited output.
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(_chunk) {}
     }
 
     onExited: function(exitCode) {
+      if (root._outputOverflow) {
+        root.scanning = false
+        return
+      }
       // A complete minimized document remains authoritative even if a future
       // adapter uses a non-zero exit. Invalid stdout always fails visibly.
-      var valid = root.applyOutput(String(scanStdout.text || root._stdout || ""))
+      var valid = root.applyOutput(root._stdout)
       if (!valid && exitCode !== 0)
         root.status = StatusModel.errorDocument("Omaudit Status adapter process failed")
       root.scanning = false

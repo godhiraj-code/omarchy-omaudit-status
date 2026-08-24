@@ -1,7 +1,10 @@
 import io
 import json
+import os
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
@@ -202,7 +205,7 @@ class BuildStatusTests(unittest.TestCase):
 class MainTests(unittest.TestCase):
     def run_main(self, completed=None, side_effect=None, argv=None):
         stream = io.StringIO()
-        with mock.patch("scripts.status.subprocess.run", return_value=completed,
+        with mock.patch("scripts.status._run_process_bounded", return_value=completed,
                         side_effect=side_effect) as run, \
              mock.patch("sys.argv", argv or ["status.py"]), \
              redirect_stdout(stream):
@@ -263,7 +266,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(document["totals"]["changed"], 1)
         run.assert_called_once_with(
             ["omaudit", "check", "--json"],
-            shell=False, capture_output=True, text=True, timeout=120, check=False,
+            timeout=120,
         )
 
     def test_include_builtins_adds_all_flag(self):
@@ -276,8 +279,23 @@ class MainTests(unittest.TestCase):
         self.assertTrue(document["ok"])
         run.assert_called_once_with(
             ["omaudit", "check", "--json", "--all"],
-            shell=False, capture_output=True, text=True, timeout=120, check=False,
+            timeout=120,
         )
+
+    def test_adapter_emits_ascii_safe_json_for_chunked_qml(self):
+        completed = subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps([plugin("cafe", name="Café")]), stderr="",
+        )
+        stream = io.StringIO()
+        with mock.patch("scripts.status._run_process_bounded", return_value=completed), \
+             mock.patch("sys.argv", ["status.py"]), \
+             redirect_stdout(stream):
+            status.main()
+
+        raw = stream.getvalue()
+        self.assertIn(r"Caf\u00e9", raw)
+        self.assertNotIn("Café", raw)
+        self.assertEqual(json.loads(raw)["plugins"][0]["name"], "Café")
 
     def test_input_mode_reads_saved_json_without_subprocess(self):
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as saved:
@@ -286,7 +304,7 @@ class MainTests(unittest.TestCase):
         self.addCleanup(Path(path).unlink, missing_ok=True)
 
         stream = io.StringIO()
-        with mock.patch("scripts.status.subprocess.run") as run, \
+        with mock.patch("scripts.status._run_process_bounded") as run, \
              mock.patch("sys.argv", ["status.py", "--input", path]), \
              redirect_stdout(stream):
             result = status.main()
@@ -298,7 +316,7 @@ class MainTests(unittest.TestCase):
     def test_input_mode_malformed_fixture_is_visible_error(self):
         fixture = Path(__file__).parent / "fixtures" / "malformed.txt"
         stream = io.StringIO()
-        with mock.patch("scripts.status.subprocess.run") as run, \
+        with mock.patch("scripts.status._run_process_bounded") as run, \
              mock.patch("sys.argv", ["status.py", "--input", str(fixture)]), \
              redirect_stdout(stream):
             result = status.main()
@@ -309,6 +327,183 @@ class MainTests(unittest.TestCase):
         self.assertTrue(document["installed"])
         self.assertIn("json", document["error"].lower())
         run.assert_not_called()
+
+    def test_input_mode_rejects_oversized_saved_output(self):
+        with tempfile.NamedTemporaryFile("wb", suffix=".json", delete=False) as saved:
+            saved.write(b" " * (status.MAX_OMAUDIT_STDOUT_BYTES + 1))
+            path = saved.name
+        self.addCleanup(Path(path).unlink, missing_ok=True)
+
+        stream = io.StringIO()
+        with mock.patch("scripts.status._run_process_bounded") as run, \
+             mock.patch("sys.argv", ["status.py", "--input", path]), \
+             redirect_stdout(stream):
+            result = status.main()
+
+        document = json.loads(stream.getvalue())
+        self.assertEqual(result, 0)
+        self.assertFalse(document["ok"])
+        self.assertIn("size limit", document["error"].lower())
+        run.assert_not_called()
+
+
+class BoundedProcessTests(unittest.TestCase):
+    def test_exact_stdout_limit_is_accepted(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'x' * 4096)",
+        ]
+
+        completed = status._run_process_bounded(
+            command, timeout=5, stdout_limit=4096, stderr_limit=1024,
+        )
+
+        self.assertEqual(len(completed.stdout), 4096)
+
+    def test_simultaneous_stdout_and_stderr_are_drained(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'o' * 4096); "
+            "sys.stderr.buffer.write(b'e' * 1024); sys.stdout.flush(); sys.stderr.flush()",
+        ]
+
+        completed = status._run_process_bounded(
+            command, timeout=5, stdout_limit=4096, stderr_limit=1024,
+        )
+
+        self.assertEqual(len(completed.stdout), 4096)
+        self.assertEqual(len(completed.stderr), 1024)
+
+    def test_stdout_overflow_terminates_and_fails_closed(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import sys,time; sys.stdout.buffer.write(b'x' * 4097); "
+            "sys.stdout.flush(); time.sleep(10)",
+        ]
+
+        with self.assertRaisesRegex(status.OmauditError, "stdout exceeded"):
+            status._run_process_bounded(
+                command, timeout=5, stdout_limit=4096, stderr_limit=1024,
+            )
+
+    def test_stderr_overflow_terminates_and_fails_closed(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import sys,time; sys.stderr.buffer.write(b'x' * 1025); "
+            "sys.stderr.flush(); time.sleep(10)",
+        ]
+
+        with self.assertRaisesRegex(status.OmauditError, "stderr exceeded"):
+            status._run_process_bounded(
+                command, timeout=5, stdout_limit=4096, stderr_limit=1024,
+            )
+
+    def test_bounded_process_decodes_valid_utf8(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write('safe café'.encode())",
+        ]
+
+        completed = status._run_process_bounded(
+            command, timeout=5, stdout_limit=4096, stderr_limit=1024,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout, "safe café")
+
+    def test_bounded_process_rejects_invalid_utf8(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(bytes([255]))",
+        ]
+
+        with self.assertRaisesRegex(status.OmauditError, "UTF-8"):
+            status._run_process_bounded(
+                command, timeout=5, stdout_limit=4096, stderr_limit=1024,
+            )
+
+    def test_bounded_process_enforces_timeout(self):
+        command = [sys.executable, "-c", "import time; time.sleep(10)"]
+
+        with self.assertRaises(subprocess.TimeoutExpired):
+            status._run_process_bounded(
+                command, timeout=0.1, stdout_limit=4096, stderr_limit=1024,
+            )
+
+    @unittest.skipUnless(os.name == "posix", "process-group guarantee is for Omarchy Linux")
+    def test_timeout_kills_descendants_that_inherit_pipes(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import subprocess,sys,time; "
+            "subprocess.Popen([sys.executable,'-c','import time; time.sleep(10)']); "
+            "time.sleep(10)",
+        ]
+        started = time.monotonic()
+
+        with self.assertRaises(subprocess.TimeoutExpired):
+            status._run_process_bounded(
+                command, timeout=0.1, stdout_limit=4096, stderr_limit=1024,
+            )
+
+        self.assertLess(time.monotonic() - started, 4)
+
+    @unittest.skipUnless(os.name == "posix", "direct-parent-exit regression is POSIX-specific")
+    def test_timeout_kills_inherited_pipe_descendant_after_parent_exits(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import subprocess,sys; "
+            "subprocess.Popen([sys.executable,'-c','import time; time.sleep(10)'])",
+        ]
+        started = time.monotonic()
+
+        with self.assertRaises(subprocess.TimeoutExpired):
+            status._run_process_bounded(
+                command, timeout=0.1, stdout_limit=4096, stderr_limit=1024,
+            )
+
+        self.assertLess(time.monotonic() - started, 4)
+
+    def test_reader_exception_fails_closed(self):
+        class BrokenStream:
+            def read1(self, _size):
+                raise OSError("synthetic read failure")
+
+            def close(self):
+                return None
+
+        class EmptyStream:
+            def read1(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            pid = 12345
+            returncode = 0
+            stdout = BrokenStream()
+            stderr = EmptyStream()
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        with mock.patch("scripts.status.subprocess.Popen", return_value=FakeProcess()), \
+             mock.patch("scripts.status._stop_process_group"):
+            with self.assertRaisesRegex(status.OmauditError, "Unable to read Omaudit stdout"):
+                status._run_process_bounded(
+                    ["omaudit"], timeout=1, stdout_limit=4096, stderr_limit=1024,
+                )
 
 
 if __name__ == "__main__":

@@ -6,7 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import signal
 import subprocess
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,10 +21,174 @@ VALID_GRADES = {"", "A", "B", "C", "D", "F"}
 STATUS_ORDER = {"changed": 0, "not-tracked": 1, "unchanged": 2}
 GRADE_ORDER = {"F": 0, "D": 1, "C": 2, "B": 3, "A": 4, "": 5}
 MAX_PLUGINS = 100
+MAX_OMAUDIT_STDOUT_BYTES = 8 * 1024 * 1024
+MAX_OMAUDIT_STDERR_BYTES = 64 * 1024
+READ_CHUNK_BYTES = 64 * 1024
+PROCESS_TERMINATE_GRACE_SECONDS = 0.5
 
 
 class OmauditError(Exception):
     """An expected failure while obtaining Omaudit results."""
+
+
+def _stop_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Terminate the POSIX group; use best-effort cleanup on dev platforms."""
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + PROCESS_TERMINATE_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            process.poll()
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.02)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    elif os.name == "nt":
+        # Development-only fallback. Omaudit Status supports Omarchy Linux;
+        # Windows Job Object semantics are deliberately outside runtime scope.
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    elif process.poll() is None:
+        process.kill()
+
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
+
+
+def _run_process_bounded(
+    command: list[str],
+    *,
+    timeout: float,
+    stdout_limit: int = MAX_OMAUDIT_STDOUT_BYTES,
+    stderr_limit: int = MAX_OMAUDIT_STDERR_BYTES,
+) -> subprocess.CompletedProcess[str]:
+    """Run a fixed argv while retaining no more than the configured byte caps."""
+    group_options: dict[str, Any] = {}
+    if os.name == "posix":
+        group_options["start_new_session"] = True
+    elif os.name == "nt":
+        group_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    process = subprocess.Popen(
+        command,
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **group_options,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    overflow = threading.Event()
+    reader_failed = threading.Event()
+    overflow_stream: list[str] = []
+    failed_stream: list[str] = []
+    overflow_lock = threading.Lock()
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+
+    def drain(stream: Any, chunks: list[bytes], limit: int, label: str) -> None:
+        total = 0
+        read_chunk = getattr(stream, "read1", None) or stream.read
+        try:
+            while True:
+                chunk = read_chunk(READ_CHUNK_BYTES)
+                if not chunk:
+                    return
+                if total + len(chunk) > limit:
+                    with overflow_lock:
+                        if not overflow_stream:
+                            overflow_stream.append(label)
+                    overflow.set()
+                    return
+                chunks.append(chunk)
+                total += len(chunk)
+        except (OSError, ValueError):
+            with overflow_lock:
+                if not failed_stream:
+                    failed_stream.append(label)
+            reader_failed.set()
+
+    readers = [
+        threading.Thread(
+            target=drain,
+            args=(process.stdout, stdout_chunks, stdout_limit, "stdout"),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=drain,
+            args=(process.stderr, stderr_chunks, stderr_limit, "stderr"),
+            daemon=True,
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    while True:
+        if overflow.is_set() or reader_failed.is_set():
+            break
+        if process.poll() is not None and not any(reader.is_alive() for reader in readers):
+            break
+        if time.monotonic() >= deadline:
+            timed_out = True
+            break
+        overflow.wait(0.05)
+
+    if overflow.is_set() or reader_failed.is_set() or timed_out:
+        _stop_process_group(process)
+    else:
+        process.wait()
+    for reader in readers:
+        reader.join(timeout=2)
+
+    if any(reader.is_alive() for reader in readers):
+        raise OmauditError("Unable to finish reading Omaudit output")
+    process.stdout.close()
+    process.stderr.close()
+
+    if timed_out:
+        raise subprocess.TimeoutExpired(command, timeout)
+    if reader_failed.is_set():
+        label = failed_stream[0] if failed_stream else "output"
+        raise OmauditError(f"Unable to read Omaudit {label}")
+    if overflow.is_set():
+        label = overflow_stream[0] if overflow_stream else "output"
+        raise OmauditError(f"Omaudit {label} exceeded the size limit")
+
+    try:
+        stdout = b"".join(stdout_chunks).decode("utf-8", errors="strict")
+        stderr = b"".join(stderr_chunks).decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise OmauditError("Omaudit output was not valid UTF-8") from exc
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _read_saved_output(path: str) -> str:
+    """Read a deterministic fixture without allowing an unbounded allocation."""
+    with Path(path).open("rb") as source:
+        raw = source.read(MAX_OMAUDIT_STDOUT_BYTES + 1)
+    if len(raw) > MAX_OMAUDIT_STDOUT_BYTES:
+        raise OmauditError("Saved Omaudit output exceeded the size limit")
+    try:
+        return raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise OmauditError("Saved Omaudit output was not valid UTF-8") from exc
 
 
 def _utc_seconds(value: datetime | None = None) -> str:
@@ -238,14 +406,7 @@ def run_omaudit(include_builtins: bool = False) -> Any:
     command = [*COMMAND]
     if include_builtins:
         command.append("--all")
-    completed = subprocess.run(
-        command,
-        shell=False,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    completed = _run_process_bounded(command, timeout=120)
     if completed.returncode not in (0, 1):
         raise OmauditError(f"Omaudit exited with unexpected exit code {completed.returncode}")
     try:
@@ -301,7 +462,7 @@ def main() -> int:
     try:
         if args.input:
             try:
-                raw = Path(args.input).read_text(encoding="utf-8")
+                raw = _read_saved_output(args.input)
             except (OSError, UnicodeError) as exc:
                 raise OmauditError("Unable to read saved Omaudit JSON") from exc
             try:
@@ -322,7 +483,9 @@ def main() -> int:
     except Exception:
         document = _error_status(True, "Unexpected adapter failure")
 
-    print(json.dumps(document, ensure_ascii=False, separators=(",", ":")))
+    # ASCII-safe JSON prevents a multibyte UTF-8 code point from being split
+    # across Quickshell's arbitrary streaming read boundaries.
+    print(json.dumps(document, ensure_ascii=True, separators=(",", ":")))
     return 0
 
 if __name__ == "__main__":

@@ -20,12 +20,18 @@ class QmlContractTests(unittest.TestCase):
         self.assertEqual(self.manifest["entryPoints"]["barWidget"], "Panel.qml")
         self.assertFalse(self.manifest["barWidget"]["allowMultiple"])
 
-    def test_service_uses_fixed_paths_arguments_and_separate_collectors(self):
+    def test_service_uses_fixed_paths_arguments_and_bounded_streaming(self):
         self.assertIn('manifest.__sourceDir', self.service)
         self.assertIn('var argv = ["python3", adapterPath]', self.service)
         self.assertIn('argv.push("--include-builtins")', self.service)
-        self.assertIn('stdout: StdioCollector', self.service)
-        self.assertIn('stderr: StdioCollector', self.service)
+        self.assertEqual(self.service.count('SplitParser {'), 2)
+        self.assertNotIn('StdioCollector', self.service)
+        self.assertIn('splitMarker: ""', self.service)
+        self.assertIn('maxAdapterOutputChars: 2 * 1024 * 1024', self.service)
+        self.assertIn('function ingestStdout(chunk)', self.service)
+        self.assertIn('if (_stdout.length + text.length > maxAdapterOutputChars)', self.service)
+        self.assertIn('scanProcess.signal(9)', self.service)
+        self.assertIn('onRead: function(chunk) { root.ingestStdout(chunk) }', self.service)
         self.assertIn('if (scanning || scanProcess.running', self.service)
         self.assertIn('Math.max(60, Math.min(3600', self.service)
         self.assertIn('target: "omaudit-status"', self.service)

@@ -110,7 +110,7 @@ The error form remains valid JSON and uses `ok: false`. Missing Omaudit uses `in
 1. Write tests for clean results, changed results, missing Omaudit, malformed JSON, timeout, unexpected exit and evidence normalization.
 2. Run `python -m unittest tests.test_status -v`; expected failure because the adapter does not exist.
 3. Implement `build_status(results, scanned_at)`, `run_omaudit()` and `main()` using only the standard library.
-4. Invoke Omaudit with `subprocess.run(["omaudit", "check", "--json"], shell=False, capture_output=True, text=True, timeout=120)`; add `--all` only when the adapter receives the explicit `--include-builtins` flag.
+4. Invoke Omaudit in an isolated process group with a fixed `subprocess.Popen(["omaudit", "check", "--json"], shell=False, ...)` argument vector; concurrently drain both pipes with strict byte ceilings and a 120-second deadline, terminating the complete process group on failure. Emit ASCII-safe JSON for chunk-safe QML ingestion. Add `--all` only when the adapter receives the explicit `--include-builtins` flag.
 5. Treat exit codes 0 and 1 as valid because Omaudit uses 1 for findings.
 6. Validate top-level list and required per-item fields; skip invalid rows rather than forwarding arbitrary objects.
 7. Strip `dir`, full `baseline`, snippets and unneeded upstream fields.

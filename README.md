@@ -44,7 +44,7 @@ The adapter invokes Omaudit with a fixed argument vector. Plugin-controlled name
 
 ## Requirements
 
-- Omarchy 4 with the Quattro shell
+- Omarchy 4 with the Quattro shell on Linux; Windows is not a supported runtime
 - [Omaudit](https://github.com/omarchy-forge/omaudit) v0.1.0 or newer on `PATH`
 - Python 3.11 or newer
 - Node.js only for development tests
@@ -117,10 +117,12 @@ Omaudit Status has:
 - no telemetry or network service;
 - no automatic baseline acceptance;
 - no automatic remediation, plugin disable/removal or update behavior;
-- no privileged commands such as `sudo` or `pkexec`;
+- no requests for elevated privileges;
 - no malware-detection or sandboxing claim.
 
-The adapter and QML model independently validate the status document. Malformed dates, contradictory totals, duplicate plugin identities, unsupported grades/statuses and inconsistent evidence fail visibly instead of producing a green state.
+On its supported Omarchy Linux runtime, the adapter runs Omaudit in an isolated process group, retains at most 8 MiB of stdout and 64 KiB of stderr, terminates the complete group on overflow or timeout, and applies the same 8 MiB ceiling to saved fixture input. It emits ASCII-safe JSON so arbitrary stream boundaries cannot split Unicode code points. QML consumes output incrementally, retains at most 2 MiB characters of the minimized document, discards stderr without accumulating it, and force-stops an adapter that crosses the ceiling. Any ceiling violation fails visibly instead of producing a green state.
+
+The adapter and QML model independently validate the status document. Malformed dates, contradictory totals, duplicate plugin identities, unsupported grades/statuses and inconsistent evidence also fail visibly.
 
 Read the [threat model](docs/THREAT_MODEL.md) and [security policy](SECURITY.md) for the complete trust boundary and reporting process.
 
@@ -133,7 +135,7 @@ The release artifact was validated with:
 - a real Omarchy 4/Quattro desktop with two monitors;
 - singleton IPC and overlapping-refresh checks;
 - green, amber, red and error-state validation;
-- 26 Python contract and lifecycle tests;
+- 38 Python contract, lifecycle and oversized-output tests;
 - adversarial JavaScript status-model tests;
 - Linux shell syntax and Git whitespace checks.
 
