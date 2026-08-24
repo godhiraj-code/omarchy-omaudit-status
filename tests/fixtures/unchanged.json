@@ -1,0 +1,54 @@
+[
+  {
+    "id": "example.clock",
+    "name": "Clock",
+    "dir": "/home/alice/.config/omarchy/plugins/example.clock",
+    "version": "1.2.0",
+    "kinds": [
+      "bar-widget"
+    ],
+    "grade": "B",
+    "score": 82,
+    "observed": [
+      "process.exec"
+    ],
+    "composition": [],
+    "firstParty": false,
+    "baseline": {
+      "omauditSchemaVersion": 1,
+      "plugin": "example.clock",
+      "version": "1.2.0",
+      "recordedAt": "2026-08-23T10:00:00+00:00",
+      "grade": "B",
+      "acceptedCapabilities": [
+        "process.exec"
+      ],
+      "commit": "1111111111111111111111111111111111111111",
+      "note": "Reviewed locally"
+    },
+    "added": [],
+    "evidence": {},
+    "status": "unchanged"
+  },
+  {
+    "id": "omarchy.weather",
+    "name": "Weather",
+    "dir": "/home/alice/.local/share/omarchy/shell/plugins/panels/weather",
+    "version": "1.0.0",
+    "kinds": [
+      "bar-widget"
+    ],
+    "grade": "C",
+    "score": 68,
+    "observed": [
+      "net.outbound",
+      "process.exec"
+    ],
+    "composition": [],
+    "firstParty": true,
+    "baseline": null,
+    "added": [],
+    "evidence": {},
+    "status": "not-tracked"
+  }
+]

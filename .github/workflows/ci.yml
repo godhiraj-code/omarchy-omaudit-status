@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate manifest and JSON fixtures
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          paths = [Path("manifest.json"), *sorted(Path("tests/fixtures").glob("*.json"))]
+          assert len(paths) > 1, "no JSON fixtures found"
+          for path in paths:
+              with path.open(encoding="utf-8") as handle:
+                  json.load(handle)
+              print(f"validated {path}")
+          PY
+
+      - name: Run Python adapter tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Check local lifecycle script syntax
+        run: bash -n scripts/install-local.sh scripts/remove-local.sh
+
+      - name: Run status model tests
+        run: node tests/status-model-test.mjs
+
+      - name: Smoke-test changed fixture adapter output
+        shell: bash
+        run: |
+          python scripts/status.py --input tests/fixtures/changed.json > adapter-status.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          result = json.loads(Path("adapter-status.json").read_text(encoding="utf-8"))
+          assert result["schemaVersion"] == 1
+          assert result["ok"] is True
+          assert result["installed"] is True
+          assert result["totals"]["changed"] == 1
+          assert result["plugins"]
+          assert result["plugins"][0]["status"] == "changed"
+          print("adapter changed-fixture smoke passed")
+          PY
+
+      - name: Smoke-test unchanged and malformed fixture handling
+        shell: bash
+        run: |
+          python scripts/status.py --input tests/fixtures/unchanged.json > unchanged-status.json
+          python scripts/status.py --input tests/fixtures/malformed.txt > malformed-status.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          unchanged = json.loads(Path("unchanged-status.json").read_text(encoding="utf-8"))
+          malformed = json.loads(Path("malformed-status.json").read_text(encoding="utf-8"))
+          assert unchanged["ok"] is True
+          assert unchanged["totals"]["plugins"] == 2
+          assert malformed["ok"] is False
+          assert malformed["error"]
+          print("adapter unchanged/malformed fixture smoke passed")
+          PY

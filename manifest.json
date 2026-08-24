@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "godhiraj.omaudit-status",
+  "name": "Omaudit Status",
+  "version": "0.1.0",
+  "author": "Dhiraj Das",
+  "license": "MIT",
+  "description": "Summarizes Omaudit plugin risk and capability drift.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Omaudit Status",
+    "description": "Summarizes Omaudit plugin risk and capability drift.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 900,
+      "includeBuiltins": false
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 60,
+        "max": 3600,
+        "step": 60,
+        "defaultValue": 900
+      },
+      {
+        "key": "includeBuiltins",
+        "type": "boolean",
+        "label": "Include first-party Omarchy plugins",
+        "defaultValue": false
+      }
+    ]
+  }
+}

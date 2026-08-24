@@ -1,0 +1,49 @@
+[
+  {
+    "id": "example.weather",
+    "name": "Weather Plus",
+    "dir": "/home/alice/.config/omarchy/plugins/example.weather",
+    "version": "2.1.0",
+    "kinds": [
+      "bar-widget"
+    ],
+    "grade": "F",
+    "score": 22,
+    "observed": [
+      "credentials.read",
+      "net.outbound",
+      "process.exec"
+    ],
+    "composition": [
+      "composition: credentials plus outbound network"
+    ],
+    "firstParty": false,
+    "baseline": {
+      "omauditSchemaVersion": 1,
+      "plugin": "example.weather",
+      "version": "2.0.0",
+      "recordedAt": "2026-08-20T09:30:00+00:00",
+      "grade": "B",
+      "acceptedCapabilities": [
+        "process.exec"
+      ],
+      "commit": "2222222222222222222222222222222222222222",
+      "note": "Reviewed before update"
+    },
+    "added": [
+      "credentials.read",
+      "net.outbound"
+    ],
+    "evidence": {
+      "credentials.read": [
+        "Service.qml",
+        18
+      ],
+      "net.outbound": [
+        "Service.qml",
+        27
+      ]
+    },
+    "status": "changed"
+  }
+]
