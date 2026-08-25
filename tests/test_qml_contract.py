@@ -14,6 +14,7 @@ class QmlContractTests(unittest.TestCase):
         cls.panel = (ROOT / "Panel.qml").read_text(encoding="utf-8")
 
     def test_manifest_declares_singleton_service_and_bar_widget(self):
+        self.assertEqual(self.manifest["version"], "0.1.2")
         self.assertEqual(self.manifest["kinds"], ["service", "bar-widget"])
         self.assertTrue(self.manifest["keepLoaded"])
         self.assertEqual(self.manifest["entryPoints"]["service"], "Service.qml")
@@ -58,6 +59,15 @@ class QmlContractTests(unittest.TestCase):
         self.assertIn('Omaudit is missing.', self.panel)
         self.assertIn('contentWidth: popup.fittedContentWidth', self.panel)
         self.assertIn('contentHeight: popup.fittedContentHeight', self.panel)
+
+    def test_every_panel_text_item_forces_plain_text_rendering(self):
+        text_items = self.panel.count("Text {")
+        self.assertGreater(text_items, 0)
+        self.assertEqual(self.panel.count("textFormat: Text.PlainText"), text_items)
+        self.assertIn(
+            'text: (modelData.name || modelData.id)',
+            self.panel,
+        )
 
 
 if __name__ == "__main__":

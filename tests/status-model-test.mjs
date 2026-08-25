@@ -57,6 +57,13 @@ assert.equal(Model.tone(clean.document), "positive")
 assert.equal(Model.colorKey(clean.document), "green")
 assert.match(Model.summary(clean.document), /unchanged/i)
 
+const hostileLabel = '</Text><img src="file:///etc/passwd"> 中文 مرحبا'
+const hostileText = Model.validateDocument(documentFor([
+  plugin({ id: "hostile.plugin", name: hostileLabel })
+]))
+assert.equal(hostileText.valid, true)
+assert.equal(hostileText.document.plugins[0].name, hostileLabel)
+
 const untracked = Model.validateDocument(documentFor([
   plugin({ status: "not-tracked", grade: "", score: 0 })
 ]))

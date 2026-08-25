@@ -138,6 +138,7 @@ BarWidget {
             iconComponent: Component {
               Text {
                 text: "󰒃"
+                textFormat: Text.PlainText
                 color: root.shieldColor
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
@@ -153,6 +154,7 @@ BarWidget {
                 ? "Capability and risk review is unavailable. Findings require human review."
               : "Capability and risk review only — changes require human review."
               )
+            textFormat: Text.PlainText
             color: Qt.darker(root.foreground, 1.35)
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -180,6 +182,7 @@ BarWidget {
                 Text {
                   anchors.horizontalCenter: parent.horizontalCenter
                   text: parent.modelData.value
+                  textFormat: Text.PlainText
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.subtitle
@@ -188,6 +191,7 @@ BarWidget {
                 Text {
                   anchors.horizontalCenter: parent.horizontalCenter
                   text: parent.modelData.label
+                  textFormat: Text.PlainText
                   color: Qt.darker(root.foreground, 1.5)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -199,6 +203,7 @@ BarWidget {
           Text {
             width: parent.width
             text: "Scanned " + StatusModel.scanTime(root.statusDocument)
+            textFormat: Text.PlainText
             color: Qt.darker(root.foreground, 1.55)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -238,6 +243,7 @@ BarWidget {
                   Text {
                     width: parent.width
                     text: (modelData.name || modelData.id) + (modelData.grade ? "  ·  Grade " + modelData.grade : "")
+                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
@@ -250,6 +256,7 @@ BarWidget {
                       ? "Composition risk needs review"
                       : (modelData.status === "changed" ? "Capability drift"
                         : (modelData.status === "not-tracked" ? "Baseline review needed" : "Unchanged"))
+                    textFormat: Text.PlainText
                     color: modelData.status === "unchanged"
                       ? Qt.darker(root.foreground, 1.5) : root.shieldColor
                     font.family: root.fontFamily
@@ -265,6 +272,7 @@ BarWidget {
             visible: root.totals.plugins > root.visiblePlugins.length
             width: parent.width
             text: "+ " + (root.totals.plugins - root.visiblePlugins.length) + " more plugins"
+            textFormat: Text.PlainText
             color: Qt.darker(root.foreground, 1.5)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "godhiraj.omaudit-status",
   "name": "Omaudit Status",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Dhiraj Das",
   "license": "MIT",
   "description": "Summarizes Omaudit plugin risk and capability drift.",
