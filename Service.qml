@@ -12,6 +12,8 @@ Item {
   property bool scanning: false
   property int refreshIntervalSec: 900
   property bool includeBuiltins: false
+  property double nowMs: Date.now()
+  readonly property int staleAfterSec: refreshIntervalSec + 150
   readonly property int maxAdapterOutputChars: 2 * 1024 * 1024
 
   readonly property string adapterPath: manifest && manifest.__sourceDir
@@ -22,6 +24,7 @@ Item {
   property bool _outputOverflow: false
   property bool _startupScanStarted: false
   property bool _refreshPending: false
+  property string _failure: ""
   property int _configurationGeneration: 0
   property int _activeGeneration: -1
 
@@ -46,11 +49,15 @@ Item {
     if (scanning || scanProcess.running || adapterPath === "") return false
     _stdout = ""
     _outputOverflow = false
+    _failure = ""
     _activeGeneration = _configurationGeneration
     var argv = ["python3", adapterPath]
     if (includeBuiltins) argv.push("--include-builtins")
     scanProcess.command = argv
     scanning = true
+    nowMs = Date.now()
+    watchdog.restart()
+    startDeadline.restart()
     scanProcess.running = true
     return true
   }
@@ -61,7 +68,53 @@ Item {
   }
 
   function review() {
-    Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", "omaudit check"])
+    if (status.installed === false) return false
+    Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation",
+      includeBuiltins ? "omaudit check --all" : "omaudit check"])
+    return true
+  }
+
+  function finishScan() {
+    watchdog.stop()
+    startDeadline.stop()
+    killDeadline.stop()
+    _stdout = ""
+    scanning = false
+    nowMs = Date.now()
+    var pending = _refreshPending
+    _refreshPending = false
+    if (pending) Qt.callLater(root.refresh)
+  }
+
+  function failScan(message) {
+    if (!scanning) return
+    if (_failure === "") _failure = message
+    _stdout = ""
+    if (StatusModel.shouldPublishScan(_activeGeneration, _configurationGeneration))
+      status = StatusModel.errorDocument(_failure)
+    watchdog.stop()
+    startDeadline.stop()
+    // v0.2.1 Process.signal uses the PID directly: never signal a zero PID
+    // while QProcess is starting. Give Python time to clean its scanner group.
+    if (scanProcess.running) {
+      if (Number(scanProcess.processId) > 0) scanProcess.signal(15)
+      killDeadline.restart()
+    } else finishScan()
+  }
+
+  function startTimedOut() {
+    failScan("Omaudit Status adapter did not start within 10 seconds; check python3")
+  }
+
+  function scanTimedOut() {
+    failScan("Omaudit Status adapter timed out after 150 seconds")
+  }
+
+  function hardStop() {
+    if (!scanning) return
+    if (!scanProcess.running) finishScan()
+    else if (Number(scanProcess.processId) > 0) scanProcess.signal(9)
+    // Keep overlap protection until Process confirms termination.
   }
 
   function applyOutput(raw) {
@@ -71,16 +124,12 @@ Item {
   }
 
   function ingestStdout(chunk) {
-    if (_outputOverflow) return
+    if (_outputOverflow || _failure !== "" || !scanning) return
     var text = String(chunk || "")
     if (_stdout.length + text.length > maxAdapterOutputChars) {
       _outputOverflow = true
       _stdout = ""
-      if (StatusModel.shouldPublishScan(_activeGeneration, _configurationGeneration))
-        status = StatusModel.errorDocument("Omaudit Status adapter output exceeded the size limit")
-      // Untrusted oversized output is not given an open-ended graceful-exit
-      // window. SIGKILL guarantees onExited runs and refreshes cannot wedge.
-      if (scanProcess.running) scanProcess.signal(9)
+      failScan("Omaudit Status adapter output exceeded the size limit")
       return
     }
     _stdout += text
@@ -88,6 +137,31 @@ Item {
 
   onManifestChanged: Qt.callLater(root.startupScan)
   Component.onCompleted: Qt.callLater(root.startupScan)
+
+  Timer {
+    id: startDeadline
+    interval: 10000
+    onTriggered: root.startTimedOut()
+  }
+
+  Timer {
+    id: watchdog
+    interval: 150000
+    onTriggered: root.scanTimedOut()
+  }
+
+  Timer {
+    id: killDeadline
+    interval: 5000
+    onTriggered: root.hardStop()
+  }
+
+  Timer {
+    interval: 1000
+    running: true
+    repeat: true
+    onTriggered: root.nowMs = Date.now()
+  }
 
   Timer {
     interval: root.refreshIntervalSec * 1000
@@ -113,21 +187,30 @@ Item {
       onRead: function(_chunk) {}
     }
 
-    onExited: function(exitCode) {
+    onStarted: {
+      startDeadline.stop()
+      if (root._failure !== "") root.failScan(root._failure)
+    }
+
+    // v0.2.1 FailedToStart emits runningChanged, not exited or a public
+    // errorOccurred signal. Normal completion emits exited first.
+    onRunningChanged: {
+      if (!running && root.scanning) {
+        root.failScan("Omaudit Status adapter failed to start; check python3 and the adapter path")
+      }
+    }
+
+    onExited: function(exitCode, exitStatus) {
       var resultIsCurrent = StatusModel.shouldPublishScan(root._activeGeneration,
                                                           root._configurationGeneration)
-      if (resultIsCurrent && !root._outputOverflow) {
-        // A complete minimized document remains authoritative even if a future
-        // adapter uses a non-zero exit. Invalid stdout always fails visibly.
-        var valid = root.applyOutput(root._stdout)
-        if (!valid && exitCode !== 0)
+      if (resultIsCurrent && root._failure === "") {
+        // QProcess NormalExit is 0. Omaudit's findings exit is handled inside
+        // Python; the adapter itself must finish normally with exit code zero.
+        if (exitCode !== 0 || exitStatus !== 0)
           root.status = StatusModel.errorDocument("Omaudit Status adapter process failed")
+        else root.applyOutput(root._stdout)
       }
-      root._stdout = ""
-      root.scanning = false
-      var pending = root._refreshPending
-      root._refreshPending = false
-      if (pending) Qt.callLater(root.refresh)
+      root.finishScan()
     }
   }
 
@@ -139,12 +222,11 @@ Item {
     }
 
     function status(): string {
-      return StatusModel.ipcStatus(root.status, root.scanning)
+      return StatusModel.ipcStatus(root.status, root.scanning, root.nowMs, root.staleAfterSec)
     }
 
     function review(): string {
-      root.review()
-      return "opened"
+      return root.review() ? "opened" : "unavailable"
     }
   }
 }

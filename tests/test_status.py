@@ -39,6 +39,13 @@ def plugin(plugin_id, *, state="unchanged", grade="A", **overrides):
 
 
 class BuildStatusTests(unittest.TestCase):
+    def test_raw_grade_type_is_validated_before_normalization(self):
+        for grade in (None, False, {}, [], ["A"], 0):
+            with self.subTest(grade=grade), self.assertRaises(ValueError):
+                status.build_status([plugin("wrong-grade", grade=grade)], SCANNED_AT)
+        for grade, expected in (("", ""), (" a ", "A")):
+            self.assertEqual(status.build_status([plugin("valid", grade=grade)])["worstGrade"], expected)
+
     def test_clean_and_untracked_results(self):
         document = status.build_status(
             [plugin("clean"), plugin("new", state="not-tracked", grade="")],
@@ -140,7 +147,7 @@ class BuildStatusTests(unittest.TestCase):
             status.build_status([plugin("same"), plugin("same")], SCANNED_AT)
 
     def test_totals_and_worst_grade_include_rows_beyond_display_limit(self):
-        rows = [plugin(f"p-{index:03}") for index in range(100)]
+        rows = [plugin(f"p-{index:03}", state="changed") for index in range(100)]
         rows.append(plugin(
             "z-risk",
             grade="F",
@@ -151,7 +158,10 @@ class BuildStatusTests(unittest.TestCase):
 
         self.assertEqual(len(document["plugins"]), 100)
         self.assertEqual(document["totals"]["plugins"], 101)
-        self.assertEqual(document["totals"]["unchanged"], 101)
+        self.assertEqual(document["totals"]["unchanged"], 1)
+        self.assertEqual(document["totals"]["changed"], 100)
+        self.assertNotIn("z-risk", [item["id"] for item in document["plugins"]])
+        self.assertTrue(all(item["grade"] == "A" for item in document["plugins"]))
         self.assertEqual(document["totals"]["compositionRisks"], 1)
         self.assertEqual(document["worstGrade"], "F")
 

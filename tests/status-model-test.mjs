@@ -3,6 +3,9 @@ import { createRequire } from "node:module"
 
 const require = createRequire(import.meta.url)
 const Model = require("../StatusModel.js")
+// Freeze wall time for these historical contract fixtures. Reliability tests
+// separately exercise expiry and clock skew with explicit timestamps.
+Date.now = () => Date.parse("2026-08-24T12:00:00+00:00")
 
 assert.equal(Model.shouldPublishScan(4, 4), true)
 assert.equal(Model.shouldPublishScan(4, 5), false)
@@ -171,10 +174,12 @@ for (const duplicateId of ["same", "__proto__", "constructor", "toString"]) {
   assert.equal(Model.state(duplicateIds.document), "error")
 }
 
-const boundedPlugins = Array.from({ length: 100 }, (_, index) => plugin({ id: `p-${String(index).padStart(3, "0")}` }))
+const boundedPlugins = Array.from({ length: 100 }, (_, index) => plugin({
+  id: `p-${String(index).padStart(3, "0")}`, status: "changed"
+}))
 const boundedRisk = Model.validateDocument(documentFor(boundedPlugins, {
   worstGrade: "F",
-  totals: { plugins: 101, unchanged: 101, changed: 0, notTracked: 0, compositionRisks: 1 }
+  totals: { plugins: 101, unchanged: 1, changed: 100, notTracked: 0, compositionRisks: 1 }
 }))
 assert.equal(boundedRisk.valid, true)
 assert.equal(Model.state(boundedRisk.document), "composition-risk")

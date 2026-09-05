@@ -25,9 +25,11 @@ A native Omarchy 4/Quattro bar companion for [Omaudit](https://github.com/omarch
 | Green | Tracked plugins are unchanged. |
 | Amber | A plugin is not tracked or still needs baseline review. |
 | Red | Capability drift or composition risk needs review. |
-| Dim/error | Omaudit is unavailable, timed out or returned invalid data. |
+| Dim/error | Omaudit is unavailable, timed out, returned invalid data, or the last result is stale. |
 
 The popup reports unchanged, changed, not-tracked and composition-risk totals, the worst current grade, and a bounded worst-first plugin list. Aggregate totals still cover the complete scan even when the displayed list is capped.
+
+Refresh retains the last result with a refreshing/age indication. Results become stale after the configured interval plus 150 seconds (210–3750 seconds total); timestamps more than 30 seconds in the future are also stale. The tooltip and panel show freshness, and stale results cannot remain green. Errors appear as bounded plain text. Plugin IDs appear separately from names and grades; directional controls are visibly escaped while ordinary multilingual text is preserved.
 
 ## Architecture
 
@@ -63,7 +65,8 @@ omarchy plugin add https://github.com/godhiraj-code/omarchy-omaudit-status --ena
 - **Middle-click or right-click** the shield to refresh.
 - Press **R** while the popup is open to refresh.
 - Press **Escape** to close the popup.
-- Select **Review in terminal** to open Omaudit's interactive review flow.
+- Use **Tab/arrows** to select an enabled action and bring it into view. Use **Page Up/Page Down/Home/End** to scroll the review content.
+- Select **Review in terminal** to open Omaudit's interactive review flow with the current scope (`omaudit check` or `omaudit check --all`). When Omaudit is missing, Review is disabled; click the official instructions link or press **I** to open it for manual installation.
 
 ### Settings
 
@@ -83,7 +86,7 @@ From a local checkout:
 ./scripts/install-local.sh
 ```
 
-The helper validates the source, refuses to overwrite an existing installation, copies it into the local Omarchy plugin directory, rescans local plugins and enables it through Omarchy.
+The helper validates the source, refuses to overwrite an existing installation, copies it into the local Omarchy plugin directory, rescans local plugins and enables it through Omarchy. A failed copy or enable removes only the destination newly created by that invocation, allowing a retry.
 
 Equivalent manual commands:
 
@@ -121,7 +124,7 @@ Omaudit Status has:
 - no requests for elevated privileges;
 - no malware-detection or sandboxing claim.
 
-On its supported Omarchy Linux runtime, the adapter runs Omaudit in an isolated process group, retains at most 8 MiB of stdout and 64 KiB of stderr, terminates the complete group on overflow or timeout, and applies the same 8 MiB ceiling to saved fixture input. It emits ASCII-safe JSON so arbitrary stream boundaries cannot split Unicode code points. QML consumes output incrementally, retains at most 2 MiB characters of the minimized document, discards stderr without accumulating it, and force-stops an adapter that crosses the ceiling. Any ceiling violation fails visibly instead of producing a green state.
+On its supported Omarchy Linux runtime, the adapter runs Omaudit in an isolated process group, retains at most 8 MiB of stdout and 64 KiB of stderr, terminates the group on overflow, timeout or graceful cancellation, and applies the same 8 MiB ceiling to saved fixture input. It emits ASCII-safe JSON so arbitrary stream boundaries cannot split Unicode code points; Python and JavaScript field limits both count code points. QML retains at most 2 MiB characters, discards stderr, requires a normal zero adapter exit, and imposes independent 10-second startup and 150-second execution deadlines. Cancellation sends SIGTERM for scanner cleanup, with a SIGKILL fallback after 5 seconds. Any failure is non-green. Hard-killing an unresponsive adapter cannot guarantee cleanup of its separate scanner session; see the threat model.
 
 The adapter and QML model independently validate the status document. Malformed dates, contradictory totals, duplicate plugin identities, unsupported grades/statuses and inconsistent evidence also fail visibly.
 
@@ -129,7 +132,7 @@ Read the [threat model](docs/THREAT_MODEL.md) and [security policy](SECURITY.md)
 
 ## Verification
 
-The release artifact was validated with:
+Earlier release validation recorded:
 
 - the official Omarchy plugin validator;
 - real Omaudit default and `--all` scans;
@@ -140,12 +143,14 @@ The release artifact was validated with:
 - adversarial JavaScript status-model tests;
 - Linux shell syntax and Git whitespace checks.
 
+The 0.1.3 reliability changes add executable service-policy and keyboard-scroll probes, real adapter-to-model round trips, and Linux tests using fake scanners and temporary homes for cancellation and partial-copy failure. These probes do not establish native Quickshell loading, signal delivery, visual layout or desktop keyboard behavior. Parent verification on Omarchy remains required. Process API evidence and version uncertainty are recorded in the [threat model](docs/THREAT_MODEL.md).
+
 Run the repository checks locally:
 
 ```sh
 python -m unittest discover -s tests -p "test_*.py" -v
 node --check StatusModel.js
-node tests/status-model-test.mjs
+node --test tests/*-test.mjs
 bash -n scripts/install-local.sh scripts/remove-local.sh
 python -m json.tool manifest.json >/dev/null
 omarchy plugin validate .

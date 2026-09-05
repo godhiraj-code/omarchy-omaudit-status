@@ -14,7 +14,7 @@ class QmlContractTests(unittest.TestCase):
         cls.panel = (ROOT / "Panel.qml").read_text(encoding="utf-8")
 
     def test_manifest_declares_singleton_service_and_bar_widget(self):
-        self.assertEqual(self.manifest["version"], "0.1.2")
+        self.assertEqual(self.manifest["version"], "0.1.3")
         self.assertEqual(self.manifest["kinds"], ["service", "bar-widget"])
         self.assertTrue(self.manifest["keepLoaded"])
         self.assertEqual(self.manifest["entryPoints"]["service"], "Service.qml")
@@ -42,7 +42,7 @@ class QmlContractTests(unittest.TestCase):
         self.assertIn('if (pending) Qt.callLater(root.refresh)', self.service)
         self.assertIn('Math.max(60, Math.min(3600', self.service)
         self.assertIn('target: "omaudit-status"', self.service)
-        self.assertIn('["omarchy-launch-floating-terminal-with-presentation", "omaudit check"]', self.service)
+        self.assertIn('includeBuiltins ? "omaudit check --all" : "omaudit check"', self.service)
         for forbidden in ("sudo", "pkexec", "omaudit baseline", "omaudit add", "omaudit install"):
             self.assertNotIn(forbidden, self.service)
 
@@ -65,7 +65,7 @@ class QmlContractTests(unittest.TestCase):
         self.assertGreater(text_items, 0)
         self.assertEqual(self.panel.count("textFormat: Text.PlainText"), text_items)
         self.assertIn(
-            'text: (modelData.name || modelData.id)',
+            'text: StatusModel.displayText(modelData.name || modelData.id, 200)',
             self.panel,
         )
 

@@ -15,20 +15,22 @@ command -v omaudit >/dev/null 2>&1 || {
   exit 1
 }
 
-if [[ -e "$TARGET_DIR" ]]; then
+if [[ -e "$TARGET_DIR" || -L "$TARGET_DIR" ]]; then
   printf 'error: %s already exists; refusing to overwrite it\n' "$TARGET_DIR" >&2
   exit 1
 fi
 
 omarchy plugin validate "$SOURCE_DIR"
 mkdir -p -- "$PLUGIN_ROOT"
-cp -a -- "$SOURCE_DIR/." "$TARGET_DIR"
+# Atomic mkdir establishes ownership; a concurrent install is never removed.
+mkdir -- "$TARGET_DIR"
 
 cleanup_new_copy() {
   rm -rf -- "$TARGET_DIR"
   omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
 }
 trap cleanup_new_copy ERR
+cp -a -- "$SOURCE_DIR/." "$TARGET_DIR"
 omarchy-shell shell rescanPlugins
 omarchy plugin enable "$PLUGIN_ID" --section right
 trap - ERR

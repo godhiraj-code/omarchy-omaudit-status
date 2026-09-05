@@ -17,9 +17,16 @@ BarWidget {
   readonly property var hostBarConfig: bar ? bar.barConfig : null
   readonly property var statusDocument: guardService && guardService.status
     ? guardService.status : waitingStatus
-  readonly property string guardState: StatusModel.state(statusDocument)
-  readonly property string guardTone: StatusModel.tone(statusDocument)
-  readonly property string guardSummary: StatusModel.summary(statusDocument)
+  readonly property double nowMs: guardService ? guardService.nowMs : Date.now()
+  readonly property int staleAfterSec: guardService ? guardService.staleAfterSec : 1050
+  readonly property bool canRefresh: !!guardService && !guardService.scanning
+  readonly property bool canReview: !!guardService && statusDocument.installed !== false
+  readonly property string guardState: StatusModel.state(statusDocument, nowMs, staleAfterSec)
+  readonly property string guardTone: StatusModel.tone(statusDocument, nowMs, staleAfterSec)
+  readonly property string freshness: StatusModel.freshnessText(statusDocument,
+    !!guardService && guardService.scanning, nowMs, staleAfterSec)
+  readonly property string guardSummary: StatusModel.summary(statusDocument, nowMs, staleAfterSec)
+    + "; " + freshness
   readonly property var totals: statusDocument && statusDocument.totals
     ? statusDocument.totals : StatusModel.zeroTotals()
   readonly property var visiblePlugins: StatusModel.visiblePlugins(statusDocument, 8)
@@ -27,7 +34,7 @@ BarWidget {
   readonly property color barForeground: bar ? bar.barForeground : Color.bar.text
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color shieldColor: {
-    var key = StatusModel.colorKey(statusDocument)
+    var key = StatusModel.colorKey(statusDocument, nowMs, staleAfterSec)
     if (key === "green") return Color.pick("omaudit-status.clean", "#6fa35b")
     if (key === "amber") return Color.pick("omaudit-status.caution", "#d0a447")
     if (key === "red") return bar ? bar.urgent : Color.urgent
@@ -55,8 +62,32 @@ BarWidget {
   readonly property bool opened: popupOpen
 
   function activateAction() {
-    if (selectedAction === 0) refresh()
-    else review()
+    if (selectedAction === 0 && canRefresh) refresh()
+    else if (selectedAction === 1 && canReview) review()
+  }
+
+  function scrollContent(delta) {
+    scroller.contentY = Math.max(0, Math.min(Math.max(0, scroller.contentHeight - scroller.height),
+      scroller.contentY + delta))
+  }
+
+  function revealAction() {
+    if (selectedAction < 0) return
+    var bottom = actionRow.y + actionRow.height
+    if (bottom > scroller.contentY + scroller.height)
+      scrollContent(bottom - scroller.height - scroller.contentY)
+    else if (actionRow.y < scroller.contentY)
+      scrollContent(actionRow.y - scroller.contentY)
+  }
+
+  function selectAction() {
+    if (canRefresh && canReview) selectedAction = selectedAction === 0 ? 1 : 0
+    else selectedAction = canRefresh ? 0 : (canReview ? 1 : -1)
+    Qt.callLater(root.revealAction)
+  }
+
+  function installationInstructions() {
+    Qt.openUrlExternally("https://github.com/omarchy-forge/omaudit")
   }
 
   implicitWidth: vertical ? barSize : button.implicitWidth
@@ -66,9 +97,12 @@ BarWidget {
   onSettingsChanged: Qt.callLater(root.configureService)
   onHostBarConfigChanged: Qt.callLater(root.configureService)
   onGuardServiceChanged: Qt.callLater(root.configureService)
+  onCanRefreshChanged: if (popupOpen && (selectedAction < 0 || (selectedAction === 0 && !canRefresh))) selectAction()
+  onCanReviewChanged: if (popupOpen && (selectedAction < 0 || (selectedAction === 1 && !canReview))) selectAction()
   onPopupOpenChanged: if (popupOpen) {
-    selectedAction = 1
+    selectedAction = canReview ? 1 : (canRefresh ? 0 : -1)
     refresh()
+    Qt.callLater(root.revealAction)
   }
   Component.onCompleted: Qt.callLater(root.configureService)
 
@@ -102,17 +136,34 @@ BarWidget {
       anchors.fill: parent
       onCloseRequested: root.close()
       onMoveRequested: function(dx, dy) {
-        if (dx !== 0 || dy !== 0) root.selectedAction = root.selectedAction === 0 ? 1 : 0
+        if (dx !== 0 || dy !== 0) root.selectAction()
       }
       onTabRequested: function(direction) {
-        root.selectedAction = root.selectedAction === 0 ? 1 : 0
+        root.selectAction()
       }
       onActivateRequested: root.activateAction()
       onTextKey: function(text) {
         if (text === "r" || text === "R") root.refresh()
+        if ((text === "i" || text === "I") && root.statusDocument.installed === false)
+          root.installationInstructions()
+      }
+      // Forward only scrolling keys to a separate item, preserving the host's
+      // Keys.onPressed dispatcher for Escape, Tab, activation and arrows.
+      Keys.forwardTo: [scrollKeys]
+      Item {
+        id: scrollKeys
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_PageDown) root.scrollContent(scroller.height * 0.8)
+          else if (event.key === Qt.Key_PageUp) root.scrollContent(-scroller.height * 0.8)
+          else if (event.key === Qt.Key_Home) root.scrollContent(-scroller.contentHeight)
+          else if (event.key === Qt.Key_End) root.scrollContent(scroller.contentHeight)
+          else { event.accepted = false; return }
+          event.accepted = true
+        }
       }
 
       Flickable {
+        id: scroller
         anchors.fill: parent
         contentWidth: width
         contentHeight: content.implicitHeight
@@ -161,6 +212,41 @@ BarWidget {
             wrapMode: Text.Wrap
           }
 
+          Text {
+            visible: root.statusDocument.ok !== true
+            width: parent.width
+            text: StatusModel.displayText(root.statusDocument.error, 300)
+            textFormat: Text.PlainText
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WrapAnywhere
+          }
+
+          Text {
+            visible: root.statusDocument.installed === false
+            width: parent.width
+            text: "Official installation instructions (I): https://github.com/omarchy-forge/omaudit"
+            textFormat: Text.PlainText
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WrapAnywhere
+            MouseArea {
+              anchors.fill: parent
+              onClicked: root.installationInstructions()
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: root.guardService && root.guardService.includeBuiltins ? "All plugins" : "Third-party plugins"
+            textFormat: Text.PlainText
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
           Row {
             width: parent.width
             spacing: Style.space(12)
@@ -202,12 +288,13 @@ BarWidget {
 
           Text {
             width: parent.width
-            text: "Scanned " + StatusModel.scanTime(root.statusDocument)
+            text: root.freshness + "\n" + (root.statusDocument.ok ? "Successful scan: " : "Last attempt: ")
+              + StatusModel.scanTime(root.statusDocument)
             textFormat: Text.PlainText
             color: Qt.darker(root.foreground, 1.55)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
           }
 
           PanelSeparator {
@@ -242,13 +329,30 @@ BarWidget {
 
                   Text {
                     width: parent.width
-                    text: (modelData.name || modelData.id) + (modelData.grade ? "  ·  Grade " + modelData.grade : "")
+                    text: StatusModel.displayText(modelData.name || modelData.id, 200)
                     textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
                     font.bold: modelData.status !== "unchanged"
                     elide: Text.ElideRight
+                  }
+                  Text {
+                    width: parent.width
+                    text: "ID: " + StatusModel.displayText(modelData.id, 200)
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WrapAnywhere
+                  }
+                  Text {
+                    width: parent.width
+                    text: "Grade " + (modelData.grade || "—")
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
                   }
                   Text {
                     width: parent.width
@@ -279,6 +383,7 @@ BarWidget {
           }
 
           Row {
+            id: actionRow
             anchors.right: parent.right
             spacing: Style.space(8)
 
@@ -288,7 +393,7 @@ BarWidget {
               foreground: root.foreground
               hasCursor: root.selectedAction === 0
               focusable: true
-              enabled: !(root.guardService && root.guardService.scanning)
+              enabled: root.canRefresh
               onHovered: function(isHovered) { if (isHovered) root.selectedAction = 0 }
               onClicked: root.refresh()
             }
@@ -299,6 +404,7 @@ BarWidget {
               foreground: root.foreground
               hasCursor: root.selectedAction === 1
               focusable: true
+              enabled: root.canReview
               onHovered: function(isHovered) { if (isHovered) root.selectedAction = 1 }
               onClicked: root.review()
             }

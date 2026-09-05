@@ -17,7 +17,7 @@ function errorDocument(message, installed) {
     worstGrade: "",
     totals: zeroTotals(),
     plugins: [],
-    error: String(message || "Invalid status document").substring(0, 160)
+    error: displayText(String(message || "Invalid status document"), 300)
   }
 }
 
@@ -31,7 +31,8 @@ function integerInRange(value, minimum, maximum) {
 }
 
 function boundedString(value, maximum, allowEmpty) {
-  if (typeof value !== "string" || value.length > maximum) return false
+  // Match Python's Unicode code-point limits, not UTF-16 storage units.
+  if (typeof value !== "string" || Array.from(value).length > maximum) return false
   if (value.length === 0) return allowEmpty === true
   return value.trim().length > 0 && value === value.trim()
 }
@@ -86,8 +87,10 @@ function validPlugin(plugin) {
     && boundedString(plugin.id, 200, false)
     && boundedString(plugin.name, 200, false)
     && boundedString(plugin.version, 100, false)
+    && typeof plugin.grade === "string"
     && VALID_GRADE[plugin.grade] === true
     && integerInRange(plugin.score, 0, 100)
+    && typeof plugin.status === "string"
     && VALID_STATUS[plugin.status] === true
     && typeof plugin.firstParty === "boolean"
     && stringArray(plugin.added, 12, 300)
@@ -109,9 +112,14 @@ function comparePlugins(left, right) {
   if (statusDifference !== 0) return statusDifference
   var gradeDifference = GRADE_RANK[left.grade] - GRADE_RANK[right.grade]
   if (gradeDifference !== 0) return gradeDifference
-  if (left.id < right.id) return -1
-  if (left.id > right.id) return 1
-  return 0
+  // Python orders strings by code point, not JavaScript's UTF-16 units.
+  var leftPoints = Array.from(left.id)
+  var rightPoints = Array.from(right.id)
+  for (var i = 0; i < Math.min(leftPoints.length, rightPoints.length); i++) {
+    var difference = leftPoints[i].codePointAt(0) - rightPoints[i].codePointAt(0)
+    if (difference !== 0) return difference
+  }
+  return leftPoints.length - rightPoints.length
 }
 
 function validateDocument(input) {
@@ -196,10 +204,20 @@ function validateDocument(input) {
   return { valid: true, document: value }
 }
 
-function state(document) {
+function stale(document, nowMs, staleAfterSec) {
+  var now = nowMs === undefined ? Date.now() : nowMs
+  var limit = staleAfterSec === undefined ? 1050 : staleAfterSec
+  if (!isFinite(now) || !isFinite(limit) || !validUtcTimestamp(document.scannedAt)) return true
+  limit = Math.max(210, Math.min(3750, limit))
+  var age = now - Date.parse(document.scannedAt)
+  return age < -30000 || age > limit * 1000
+}
+
+function state(document, nowMs, staleAfterSec) {
   var doc = plainObject(document) ? document : errorDocument()
   if (doc.ok !== true || doc.installed !== true || doc.error !== ""
       || !validUtcTimestamp(doc.scannedAt)) return "error"
+  if (stale(doc, nowMs, staleAfterSec)) return "stale"
   var totals = plainObject(doc.totals) ? doc.totals : zeroTotals()
   if (totals.compositionRisks > 0) return "composition-risk"
   if (totals.changed > 0) return "changed"
@@ -207,16 +225,16 @@ function state(document) {
   return "clean"
 }
 
-function tone(document) {
-  var current = state(document)
-  if (current === "error") return "dim"
+function tone(document, nowMs, staleAfterSec) {
+  var current = state(document, nowMs, staleAfterSec)
+  if (current === "error" || current === "stale") return "dim"
   if (current === "untracked") return "caution"
   if (current === "changed" || current === "composition-risk") return "critical"
   return "positive"
 }
 
-function colorKey(document) {
-  var currentTone = tone(document)
+function colorKey(document, nowMs, staleAfterSec) {
+  var currentTone = tone(document, nowMs, staleAfterSec)
   if (currentTone === "positive") return "green"
   if (currentTone === "caution") return "amber"
   if (currentTone === "critical") return "red"
@@ -227,10 +245,11 @@ function plural(count, singular, pluralForm) {
   return count + " " + (count === 1 ? singular : pluralForm)
 }
 
-function summary(document) {
+function summary(document, nowMs, staleAfterSec) {
   var doc = plainObject(document) ? document : errorDocument()
-  var current = state(doc)
+  var current = state(doc, nowMs, staleAfterSec)
   var totals = plainObject(doc.totals) ? doc.totals : zeroTotals()
+  if (current === "stale") return "Scan result is stale; refresh needed"
   if (current === "error") {
     return doc.installed === false
       ? "Omaudit is not installed; capability review unavailable"
@@ -242,7 +261,7 @@ function summary(document) {
     return plural(totals.changed, "plugin has", "plugins have") + " capability drift to review"
   if (current === "untracked")
     return plural(totals.notTracked, "plugin needs", "plugins need") + " baseline review"
-  if (totals.plugins === 0) return "No third-party plugins found"
+  if (totals.plugins === 0) return "No plugins found"
   return "Tracked plugin capabilities are unchanged"
 }
 
@@ -262,11 +281,38 @@ function scanTime(document) {
     + " " + pad(date.getUTCHours()) + ":" + pad(date.getUTCMinutes()) + " UTC"
 }
 
-function ipcStatus(document, scanning) {
+function freshnessText(document, scanning, nowMs, staleAfterSec) {
+  var prefix = scanning ? "Refreshing; " : ""
+  if (!document || document.ok !== true) return prefix + "No successful scan in current state"
+  var now = nowMs === undefined ? Date.now() : nowMs
+  var age = now - Date.parse(document.scannedAt)
+  if (!isFinite(age) || age < -30000) return prefix + "Scan time is invalid or in the future; refresh needed"
+  var seconds = Math.max(0, Math.floor(age / 1000))
+  var label = seconds < 60 ? seconds + "s" : (seconds < 3600 ? Math.floor(seconds / 60) + "m" : Math.floor(seconds / 3600) + "h")
+  return prefix + (stale(document, now, staleAfterSec) ? "Stale; " : "") + "last successful scan " + label + " ago"
+}
+
+function displayText(value, maximum) {
+  var points = Array.from(typeof value === "string" ? value : "")
+  var result = "", length = 0
+  var limit = integerInRange(maximum, 0, 300) ? maximum : 300
+  for (var i = 0; i < points.length && length < limit; i++) {
+    var point = points[i]
+    if (/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/.test(point))
+      point = "\\u" + ("0000" + point.charCodeAt(0).toString(16).toUpperCase()).slice(-4)
+    var size = Array.from(point).length
+    if (length + size > limit) break
+    result += point
+    length += size
+  }
+  return result
+}
+
+function ipcStatus(document, scanning, nowMs, staleAfterSec) {
   var doc = plainObject(document) ? document : errorDocument()
   return JSON.stringify({
     schemaVersion: 1,
-    state: state(doc),
+    state: state(doc, nowMs, staleAfterSec),
     scanning: scanning === true,
     scannedAt: String(doc.scannedAt || ""),
     totals: plainObject(doc.totals) ? doc.totals : zeroTotals()
@@ -289,6 +335,8 @@ if (typeof module !== "undefined") {
     summary: summary,
     visiblePlugins: visiblePlugins,
     scanTime: scanTime,
+    freshnessText: freshnessText,
+    displayText: displayText,
     ipcStatus: ipcStatus,
     shouldPublishScan: shouldPublishScan
   }

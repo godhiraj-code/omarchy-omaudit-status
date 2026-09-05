@@ -45,8 +45,12 @@ jobs:
       - name: Check local lifecycle script syntax
         run: bash -n scripts/install-local.sh scripts/remove-local.sh
 
-      - name: Run status model tests
-        run: node tests/status-model-test.mjs
+      - name: Check JavaScript syntax and run model, service and cross-layer tests
+        shell: bash
+        run: |
+          node --check StatusModel.js
+          for script in tests/*-test.mjs; do node --check "$script"; done
+          node --test tests/*-test.mjs
 
       - name: Smoke-test changed fixture adapter output
         shell: bash

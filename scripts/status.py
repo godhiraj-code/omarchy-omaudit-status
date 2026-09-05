@@ -77,6 +77,31 @@ def _run_process_bounded(
     stdout_limit: int = MAX_OMAUDIT_STDOUT_BYTES,
     stderr_limit: int = MAX_OMAUDIT_STDERR_BYTES,
 ) -> subprocess.CompletedProcess[str]:
+    """Keep cancellation handlers active before spawn through group cleanup."""
+    cancelled = threading.Event()
+    previous = {}
+    if os.name == "posix" and threading.current_thread() is threading.main_thread():
+        def cancel(_signal: int, _frame: Any) -> None:
+            # Do not interrupt Popen before its child PID is available, or
+            # interrupt cleanup. The bounded polling loop owns termination.
+            cancelled.set()
+
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous[signum] = signal.signal(signum, cancel)
+    try:
+        return _collect_process_bounded(
+            command, timeout=timeout, stdout_limit=stdout_limit,
+            stderr_limit=stderr_limit, cancelled=cancelled,
+        )
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+def _collect_process_bounded(
+    command: list[str], *, timeout: float, stdout_limit: int,
+    stderr_limit: int, cancelled: threading.Event,
+) -> subprocess.CompletedProcess[str]:
     """Run a fixed argv while retaining no more than the configured byte caps."""
     group_options: dict[str, Any] = {}
     if os.name == "posix":
@@ -141,7 +166,7 @@ def _run_process_bounded(
     deadline = time.monotonic() + timeout
     timed_out = False
     while True:
-        if overflow.is_set() or reader_failed.is_set():
+        if cancelled.is_set() or overflow.is_set() or reader_failed.is_set():
             break
         if process.poll() is not None and not any(reader.is_alive() for reader in readers):
             break
@@ -150,7 +175,7 @@ def _run_process_bounded(
             break
         overflow.wait(0.05)
 
-    if overflow.is_set() or reader_failed.is_set() or timed_out:
+    if cancelled.is_set() or overflow.is_set() or reader_failed.is_set() or timed_out:
         _stop_process_group(process)
     else:
         process.wait()
@@ -162,6 +187,8 @@ def _run_process_bounded(
     process.stdout.close()
     process.stderr.close()
 
+    if cancelled.is_set():
+        raise OmauditError("Omaudit scan cancelled")
     if timed_out:
         raise subprocess.TimeoutExpired(command, timeout)
     if reader_failed.is_set():
@@ -268,6 +295,8 @@ def _plugin(row: Any) -> dict[str, Any] | None:
         "evidence", "status",
     }
     if not required.issubset(row):
+        return None
+    if not isinstance(row["grade"], str):
         return None
     plugin_id = _string(row.get("id"), 200)
     name = _string(row.get("name"), 200)
