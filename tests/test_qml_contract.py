@@ -22,7 +22,8 @@ class QmlContractTests(unittest.TestCase):
         self.assertFalse(self.manifest["barWidget"]["allowMultiple"])
 
     def test_service_uses_fixed_paths_arguments_and_bounded_streaming(self):
-        self.assertIn('manifest.__sourceDir', self.service)
+        self.assertNotIn('manifest.__sourceDir', self.service)
+        self.assertIn('Qt.resolvedUrl("scripts/status.py")', self.service)
         self.assertIn('var argv = ["python3", adapterPath]', self.service)
         self.assertIn('argv.push("--include-builtins")', self.service)
         self.assertEqual(self.service.count('SplitParser {'), 2)

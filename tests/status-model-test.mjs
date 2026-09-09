@@ -1,11 +1,29 @@
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
+import { readFileSync } from "node:fs"
+import { runInNewContext } from "node:vm"
 
 const require = createRequire(import.meta.url)
 const Model = require("../StatusModel.js")
 // Freeze wall time for these historical contract fixtures. Reliability tests
 // separately exercise expiry and clock skew with explicit timestamps.
 Date.now = () => Date.parse("2026-08-24T12:00:00+00:00")
+
+// Exercise the service's actual binding with the sanitized Omarchy manifest.
+const serviceSource = readFileSync(new URL("../Service.qml", import.meta.url), "utf8")
+const adapterBinding = serviceSource.match(/readonly property string adapterPath: ([\s\S]*?)\n\n/)[1]
+for (const directory of ["/home/user/plugin", "/home/user/My Plugin #1%/日本語"]) {
+  const path = directory + "/scripts/status.py"
+  const resolved = new URL("file://" + directory.split("/").map(encodeURIComponent).join("/") + "/scripts/status.py").href
+  const actual = runInNewContext(adapterBinding, {
+    manifest: { id: "godhiraj.omaudit-status" },
+    Qt: { resolvedUrl(relative) {
+      assert.equal(relative, "scripts/status.py")
+      return resolved
+    } }
+  })
+  assert.equal(actual, path)
+}
 
 assert.equal(Model.shouldPublishScan(4, 4), true)
 assert.equal(Model.shouldPublishScan(4, 5), false)

@@ -16,9 +16,9 @@ Item {
   readonly property int staleAfterSec: refreshIntervalSec + 150
   readonly property int maxAdapterOutputChars: 2 * 1024 * 1024
 
-  readonly property string adapterPath: manifest && manifest.__sourceDir
-    ? String(manifest.__sourceDir).replace(/\/$/, "") + "/scripts/status.py"
-    : ""
+  // Third-party manifests no longer expose the host's private source directory.
+  readonly property string adapterPath: decodeURIComponent(
+    String(Qt.resolvedUrl("scripts/status.py")).replace(/^file:\/\//, ""))
 
   property string _stdout: ""
   property bool _outputOverflow: false
