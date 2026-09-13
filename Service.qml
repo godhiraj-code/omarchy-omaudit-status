@@ -27,6 +27,12 @@ Item {
   property string _failure: ""
   property int _configurationGeneration: 0
   property int _activeGeneration: -1
+  property var scanProcess: null
+
+  function ensureScanProcess() {
+    if (!scanProcess) scanProcess = scanProcessComponent.createObject(root)
+    return scanProcess
+  }
 
   function configure(settings) {
     var configured = settings && settings.refreshIntervalSec !== undefined
@@ -40,25 +46,26 @@ Item {
     if (scopeChanged) {
       _configurationGeneration += 1
       status = StatusModel.errorDocument("Audit scope changed; waiting for a scan using the current settings")
-      if (scanning || scanProcess.running) _refreshPending = true
+      if (scanning || (scanProcess && scanProcess.running)) _refreshPending = true
       else Qt.callLater(root.refresh)
     }
   }
 
   function refresh() {
-    if (scanning || scanProcess.running || adapterPath === "") return false
+    var process = ensureScanProcess()
+    if (!process || scanning || process.running || adapterPath === "") return false
     _stdout = ""
     _outputOverflow = false
     _failure = ""
     _activeGeneration = _configurationGeneration
     var argv = ["python3", adapterPath]
     if (includeBuiltins) argv.push("--include-builtins")
-    scanProcess.command = argv
+    process.command = argv
     scanning = true
     nowMs = Date.now()
     watchdog.restart()
     startDeadline.restart()
-    scanProcess.running = true
+    process.running = true
     return true
   }
 
@@ -96,7 +103,7 @@ Item {
     startDeadline.stop()
     // v0.2.1 Process.signal uses the PID directly: never signal a zero PID
     // while QProcess is starting. Give Python time to clean its scanner group.
-    if (scanProcess.running) {
+    if (scanProcess && scanProcess.running) {
       if (Number(scanProcess.processId) > 0) scanProcess.signal(15)
       killDeadline.restart()
     } else finishScan()
@@ -112,9 +119,21 @@ Item {
 
   function hardStop() {
     if (!scanning) return
-    if (!scanProcess.running) finishScan()
+    if (!scanProcess || !scanProcess.running) finishScan()
     else if (Number(scanProcess.processId) > 0) scanProcess.signal(9)
-    // Keep overlap protection until Process confirms termination.
+    else replaceUnstartedProcess()
+    // Keep overlap protection until a started Process confirms termination.
+  }
+
+  function replaceUnstartedProcess() {
+    if (!scanProcess || !scanProcess.running || Number(scanProcess.processId) > 0)
+      return false
+    var retired = scanProcess
+    finishScan()
+    scanProcess = null
+    retired.destroy()
+    ensureScanProcess()
+    return true
   }
 
   function applyOutput(raw) {
@@ -136,7 +155,10 @@ Item {
   }
 
   onManifestChanged: Qt.callLater(root.startupScan)
-  Component.onCompleted: Qt.callLater(root.startupScan)
+  Component.onCompleted: {
+    ensureScanProcess()
+    Qt.callLater(root.startupScan)
+  }
 
   Timer {
     id: startDeadline
@@ -170,47 +192,50 @@ Item {
     onTriggered: root.refresh()
   }
 
-  Process {
-    id: scanProcess
-    running: false
-    command: []
+  Component {
+    id: scanProcessComponent
 
-    stdout: SplitParser {
-      splitMarker: ""
-      onRead: function(chunk) { root.ingestStdout(chunk) }
-    }
+    Process {
+      running: false
+      command: []
+
+      stdout: SplitParser {
+        splitMarker: ""
+        onRead: function(chunk) { root.ingestStdout(chunk) }
+      }
 
     // Drain and discard stderr chunk-by-chunk. It never enters a retained QML
     // buffer, the status document, or the shell's inherited output.
-    stderr: SplitParser {
-      splitMarker: ""
-      onRead: function(_chunk) {}
-    }
+      stderr: SplitParser {
+        splitMarker: ""
+        onRead: function(_chunk) {}
+      }
 
-    onStarted: {
-      startDeadline.stop()
-      if (root._failure !== "") root.failScan(root._failure)
-    }
+      onStarted: {
+        startDeadline.stop()
+        if (root._failure !== "") root.failScan(root._failure)
+      }
 
     // v0.2.1 FailedToStart emits runningChanged, not exited or a public
     // errorOccurred signal. Normal completion emits exited first.
-    onRunningChanged: {
-      if (!running && root.scanning) {
-        root.failScan("Omaudit Status adapter failed to start; check python3 and the adapter path")
+      onRunningChanged: {
+        if (!running && root.scanning) {
+          root.failScan("Omaudit Status adapter failed to start; check python3 and the adapter path")
+        }
       }
-    }
 
-    onExited: function(exitCode, exitStatus) {
-      var resultIsCurrent = StatusModel.shouldPublishScan(root._activeGeneration,
-                                                          root._configurationGeneration)
-      if (resultIsCurrent && root._failure === "") {
-        // QProcess NormalExit is 0. Omaudit's findings exit is handled inside
-        // Python; the adapter itself must finish normally with exit code zero.
-        if (exitCode !== 0 || exitStatus !== 0)
-          root.status = StatusModel.errorDocument("Omaudit Status adapter process failed")
-        else root.applyOutput(root._stdout)
+      onExited: function(exitCode, exitStatus) {
+        var resultIsCurrent = StatusModel.shouldPublishScan(root._activeGeneration,
+                                                            root._configurationGeneration)
+        if (resultIsCurrent && root._failure === "") {
+          // QProcess NormalExit is 0. Omaudit's findings exit is handled inside
+          // Python; the adapter itself must finish normally with exit code zero.
+          if (exitCode !== 0 || exitStatus !== 0)
+            root.status = StatusModel.errorDocument("Omaudit Status adapter process failed")
+          else root.applyOutput(root._stdout)
+        }
+        root.finishScan()
       }
-      root.finishScan()
     }
   }
 
