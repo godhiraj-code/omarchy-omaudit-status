@@ -20,7 +20,8 @@ VALID_STATUSES = {"changed", "not-tracked", "unchanged"}
 VALID_GRADES = {"", "A", "B", "C", "D", "F"}
 STATUS_ORDER = {"changed": 0, "not-tracked": 1, "unchanged": 2}
 GRADE_ORDER = {"F": 0, "D": 1, "C": 2, "B": 3, "A": 4, "": 5}
-MAX_PLUGINS = 100
+MAX_PLUGINS = 8
+MAX_EVIDENCE_LINE = 1_000_000_000
 MAX_OMAUDIT_STDOUT_BYTES = 8 * 1024 * 1024
 MAX_OMAUDIT_STDERR_BYTES = 64 * 1024
 READ_CHUNK_BYTES = 64 * 1024
@@ -273,7 +274,7 @@ def _evidence(value: Any) -> dict[str, dict[str, Any]]:
             line = int(raw_line)
         except (TypeError, ValueError):
             continue
-        if line <= 0:
+        if line <= 0 or line > MAX_EVIDENCE_LINE:
             continue
         # Converting both slash forms before pathlib basename handling also
         # protects consumers when saved results came from another OS.
@@ -338,7 +339,7 @@ def _plugin(row: Any) -> dict[str, Any] | None:
             or not isinstance(location, (list, tuple)) or len(location) != 2
             or not isinstance(location[0], str) or not location[0].strip()
             or isinstance(location[1], bool) or not isinstance(location[1], int)
-            or location[1] <= 0
+            or location[1] <= 0 or location[1] > MAX_EVIDENCE_LINE
         ):
             return None
     normalized_added_all = [_string(item, 300) for item in added]

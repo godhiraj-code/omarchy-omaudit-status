@@ -192,12 +192,12 @@ for (const duplicateId of ["same", "__proto__", "constructor", "toString"]) {
   assert.equal(Model.state(duplicateIds.document), "error")
 }
 
-const boundedPlugins = Array.from({ length: 100 }, (_, index) => plugin({
+const boundedPlugins = Array.from({ length: 8 }, (_, index) => plugin({
   id: `p-${String(index).padStart(3, "0")}`, status: "changed"
 }))
 const boundedRisk = Model.validateDocument(documentFor(boundedPlugins, {
   worstGrade: "F",
-  totals: { plugins: 101, unchanged: 1, changed: 100, notTracked: 0, compositionRisks: 1 }
+  totals: { plugins: 9, unchanged: 1, changed: 8, notTracked: 0, compositionRisks: 1 }
 }))
 assert.equal(boundedRisk.valid, true)
 assert.equal(Model.state(boundedRisk.document), "composition-risk")

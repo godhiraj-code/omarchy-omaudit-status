@@ -65,7 +65,7 @@ omarchy plugin add https://github.com/godhiraj-code/omarchy-omaudit-status --ena
 - **Middle-click or right-click** the shield to refresh.
 - Press **R** while the popup is open to refresh.
 - Press **Escape** to close the popup.
-- Use **Tab/arrows** to select an enabled action and bring it into view. Use **Page Up/Page Down/Home/End** to scroll the review content.
+- Use the **arrow keys** to select an enabled action and bring it into view. Use **Tab/Shift+Tab** to move between bar panels and **Page Up/Page Down/Home/End** to scroll the review content.
 - Select **Review in terminal** to open Omaudit's interactive review flow with the current scope (`omaudit check` or `omaudit check --all`). When Omaudit is missing, Review is disabled; click the official instructions link or press **I** to open it for manual installation.
 
 ### Settings
@@ -143,7 +143,7 @@ Earlier release validation recorded:
 - adversarial JavaScript status-model tests;
 - Linux shell syntax and Git whitespace checks.
 
-The 0.1.3 reliability changes add executable service-policy and keyboard-scroll probes, real adapter-to-model round trips, and Linux tests using fake scanners and temporary homes for cancellation and partial-copy failure. These probes do not establish native Quickshell loading, signal delivery, visual layout or desktop keyboard behavior. Parent verification on Omarchy remains required. Process API evidence and version uncertainty are recorded in the [threat model](docs/THREAT_MODEL.md).
+The 0.1.3 reliability changes add executable service-policy and keyboard-scroll probes, real adapter-to-model round trips, and Linux tests using fake scanners and temporary homes for cancellation and partial-copy failure. Version 0.1.4 adds regression coverage for popup focus release, duplicate external-action suppression, current Omarchy popout switching and bar-panel navigation. These probes do not establish native Quickshell loading, signal delivery, visual layout or desktop keyboard behavior. Parent verification on Omarchy remains required. Process API evidence and version uncertainty are recorded in the [threat model](docs/THREAT_MODEL.md).
 
 Run the repository checks locally:
 

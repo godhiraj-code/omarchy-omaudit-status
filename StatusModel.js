@@ -2,6 +2,7 @@ var VALID_STATUS = { "unchanged": true, "changed": true, "not-tracked": true }
 var VALID_GRADE = { "": true, "A": true, "B": true, "C": true, "D": true, "F": true }
 var GRADE_RANK = { "F": 0, "D": 1, "C": 2, "B": 3, "A": 4, "": 5 }
 var STATUS_RANK = { "changed": 0, "not-tracked": 1, "unchanged": 2 }
+var MAX_VISIBLE_PLUGINS = 8
 
 function zeroTotals() {
   return { plugins: 0, unchanged: 0, changed: 0, notTracked: 0, compositionRisks: 0 }
@@ -139,7 +140,7 @@ function validateDocument(input) {
       || !boundedString(value.worstGrade, 8, true) || VALID_GRADE[value.worstGrade] !== true
       || !boundedString(value.error, 300, true)
       || !plainObject(value.totals) || !Array.isArray(value.plugins)
-      || value.plugins.length > 100) {
+      || value.plugins.length > MAX_VISIBLE_PLUGINS) {
     return { valid: false, document: errorDocument("Invalid adapter status document") }
   }
 
@@ -170,7 +171,7 @@ function validateDocument(input) {
 
   if (totals.unchanged + totals.changed + totals.notTracked !== totals.plugins
       || totals.compositionRisks > totals.plugins
-      || value.plugins.length !== Math.min(totals.plugins, 100)
+      || value.plugins.length !== Math.min(totals.plugins, MAX_VISIBLE_PLUGINS)
       || counts.unchanged > totals.unchanged
       || counts.changed > totals.changed
       || counts.notTracked > totals.notTracked
@@ -188,7 +189,7 @@ function validateDocument(input) {
       var grade = value.plugins[g].grade
       if (GRADE_RANK[grade] < GRADE_RANK[visibleWorst]) visibleWorst = grade
     }
-    if (totals.plugins <= 100) {
+    if (totals.plugins <= MAX_VISIBLE_PLUGINS) {
       if (value.worstGrade !== visibleWorst)
         return { valid: false, document: errorDocument("Inconsistent adapter worst grade") }
     } else if (GRADE_RANK[value.worstGrade] > GRADE_RANK[visibleWorst]) {

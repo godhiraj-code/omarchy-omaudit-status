@@ -33,12 +33,14 @@ function service() {
   const source = readFileSync(join(root, 'Service.qml'), 'utf8')
   const queued = [], launches = [], signals = []
   const timer = () => ({running: false, restart() {this.running = true}, stop() {this.running = false}})
+  const process = () => ({running: false, processId: 42, command: [],
+    signal(n) {signals.push(n)}, destroy() {this.destroyed = true}})
   const c = {StatusModel: Model, Date, Math, Number, String, isFinite,
     status: clean(), scanning: false, includeBuiltins: false, adapterPath: '/isolated/status.py',
     refreshIntervalSec: 900, maxAdapterOutputChars: 128, nowMs: now,
     _stdout: '', _outputOverflow: false, _startupScanStarted: false, _refreshPending: false,
     _configurationGeneration: 0, _activeGeneration: -1, _failure: '',
-    scanProcess: {running: false, processId: 42, command: [], signal(n) {signals.push(n)}},
+    scanProcess: process(), scanProcessComponent: {createObject() {return process()}},
     watchdog: timer(), startDeadline: timer(), killDeadline: timer(),
     Qt: {callLater(fn) {queued.push(fn)}},
     Quickshell: {execDetached(argv) {launches.push(Array.from(argv))}}}
@@ -93,8 +95,13 @@ test('startup deadline, watchdog and overflow terminate gracefully then bound ha
 test('started cancels startup deadline; no PID never signals process group zero', () => {
   const s = service(); s.c.refresh(); s.started()
   assert.equal(s.c.startDeadline.running, false)
+  const stuck = s.c.scanProcess
   s.c.scanProcess.processId = 0; s.c.startTimedOut(); s.c.hardStop()
   assert.deepEqual(s.signals, [])
+  assert.equal(stuck.destroyed, true, 'a permanently starting Process is retired')
+  assert.notEqual(s.c.scanProcess, stuck, 'the next refresh gets a fresh Process object')
+  assert.equal(s.c.scanning, false)
+  assert.equal(s.c.refresh(), true)
 })
 
 test('rapid scope changes discard old output and launch one current replacement', () => {
@@ -202,6 +209,75 @@ test('panel keyboard selection skips disabled actions and reveals controls after
   }
   const escape = {key: 99, accepted: false}; keyHandler(escape)
   assert.equal(escape.accepted, false, 'unhandled keys remain available to host dispatcher')
+})
+
+test('panel releases popup focus before launching external review or instructions', () => {
+  const source = readFileSync(join(root, 'Panel.qml'), 'utf8')
+  const launches = [], urls = []
+  const c = {
+    popupOpen: true,
+    pendingExternalAction: '',
+    statusDocument: {installed: true},
+    guardService: {review() {launches.push('review'); return true}},
+    externalActionDelay: {running: false, restart() {this.running = true}},
+    Qt: {openUrlExternally(url) {urls.push(url)}}
+  }
+  c.root = c; vm.createContext(c)
+  for (const name of ['close', 'queueExternalAction', 'finishExternalAction', 'review', 'installationInstructions']) {
+    const match = new RegExp(`function ${name}\\(([^)]*)\\)`).exec(source)
+    assert.ok(match, `missing ${name}`)
+    c[name] = vm.runInContext(`(function(${match[1]}) {${body(source, match[0])}})`, c)
+  }
+  c.close = c.close.bind(c)
+  c.queueExternalAction = c.queueExternalAction.bind(c)
+
+  assert.equal(c.review(), true)
+  assert.equal(c.popupOpen, false, 'review closes the focus-owning popup first')
+  assert.equal(c.pendingExternalAction, 'review')
+  assert.equal(c.externalActionDelay.running, true)
+  assert.deepEqual(launches, [], 'review is deferred until focus release')
+  assert.equal(c.review(), false, 'a pending handoff cannot open duplicate windows')
+
+  c.popupOpen = true
+  c.externalActionDelay.running = false
+  c.finishExternalAction()
+  assert.deepEqual(launches, [], 'a popup reopened by host state is closed before launch')
+  assert.equal(c.popupOpen, false)
+  assert.equal(c.pendingExternalAction, 'review')
+  assert.equal(c.externalActionDelay.running, true)
+
+  c.finishExternalAction()
+  assert.deepEqual(launches, ['review'])
+  assert.equal(c.pendingExternalAction, '')
+
+  c.popupOpen = true
+  assert.equal(c.installationInstructions(), true)
+  assert.equal(c.popupOpen, false, 'instructions close the focus-owning popup first')
+  c.finishExternalAction()
+  assert.deepEqual(urls, ['https://github.com/omarchy-forge/omaudit'])
+  assert.match(source, /id: externalActionDelay\s+interval: 100\s+onTriggered: root\.finishExternalAction\(\)/)
+})
+
+test('panel implements the current host popout handoff and bar navigation contracts', () => {
+  const source = readFileSync(join(root, 'Panel.qml'), 'utf8')
+  const calls = [], queued = []
+  const c = {popupOpen: true, popoutSwitchClosing: false,
+    bar: {switchPanelFrom(widget, direction) {calls.push([widget, direction]); return true}},
+    Qt: {callLater(fn) {queued.push(fn)}}}
+  c.root = c; vm.createContext(c)
+  for (const name of ['close', 'closeForPopoutSwitch', 'switchPanel']) {
+    const match = new RegExp(`function ${name}\\(([^)]*)\\)`).exec(source)
+    c[name] = vm.runInContext(`(function(${match[1]}) {${body(source, match[0])}})`, c)
+  }
+  c.close = c.close.bind(c)
+  c.closeForPopoutSwitch()
+  assert.equal(c.popupOpen, false)
+  assert.equal(c.popoutSwitchClosing, true)
+  queued.shift()()
+  assert.equal(c.popoutSwitchClosing, false)
+  assert.equal(c.switchPanel(-1), true)
+  assert.deepEqual(calls, [[c, -1]])
+  assert.doesNotMatch(source, /bar\.barConfig|onHostBarConfigChanged/)
 })
 
 test('panel wires sanitized errors, separate stable identity/grade, freshness and keyboard scroll', () => {

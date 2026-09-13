@@ -90,7 +90,7 @@ class BuildStatusTests(unittest.TestCase):
         )
 
         self.assertEqual(document["totals"]["plugins"], 105)
-        self.assertEqual(len(document["plugins"]), 100)
+        self.assertEqual(len(document["plugins"]), status.MAX_PLUGINS)
 
     def test_invalid_row_fails_instead_of_looking_clean(self):
         for bad_row in (None, {}, plugin("", state="changed"), plugin("bad", state="unknown")):
@@ -147,7 +147,10 @@ class BuildStatusTests(unittest.TestCase):
             status.build_status([plugin("same"), plugin("same")], SCANNED_AT)
 
     def test_totals_and_worst_grade_include_rows_beyond_display_limit(self):
-        rows = [plugin(f"p-{index:03}", state="changed") for index in range(100)]
+        rows = [
+            plugin(f"p-{index:03}", state="changed")
+            for index in range(status.MAX_PLUGINS)
+        ]
         rows.append(plugin(
             "z-risk",
             grade="F",
@@ -156,14 +159,53 @@ class BuildStatusTests(unittest.TestCase):
 
         document = status.build_status(rows, SCANNED_AT)
 
-        self.assertEqual(len(document["plugins"]), 100)
-        self.assertEqual(document["totals"]["plugins"], 101)
+        self.assertEqual(len(document["plugins"]), status.MAX_PLUGINS)
+        self.assertEqual(document["totals"]["plugins"], status.MAX_PLUGINS + 1)
         self.assertEqual(document["totals"]["unchanged"], 1)
-        self.assertEqual(document["totals"]["changed"], 100)
+        self.assertEqual(document["totals"]["changed"], status.MAX_PLUGINS)
         self.assertNotIn("z-risk", [item["id"] for item in document["plugins"]])
         self.assertTrue(all(item["grade"] == "A" for item in document["plugins"]))
         self.assertEqual(document["totals"]["compositionRisks"], 1)
         self.assertEqual(document["worstGrade"], "F")
+
+    def test_worst_case_unicode_output_fits_qml_service_limit(self):
+        rows = [
+            plugin(
+                f"p-{index:03}",
+                state="changed",
+                name="🛡" * 200,
+                version="🛡" * 100,
+                added=[f"{item:02}" + "🛡" * 198 for item in range(12)],
+                composition=[f"{item:02}" + "🛡" * 298 for item in range(6)],
+                evidence={
+                    f"{item:02}" + "🛡" * 198: ["/" + "🛡" * 251 + ".qml", item + 1]
+                    for item in range(12)
+                },
+            )
+            for index in range(100)
+        ]
+
+        document = status.build_status(rows, SCANNED_AT)
+        serialized = json.dumps(document, ensure_ascii=True, separators=(",", ":"))
+
+        self.assertEqual(len(document["plugins"]), status.MAX_PLUGINS)
+        self.assertLessEqual(len(serialized), 2 * 1024 * 1024)
+
+    def test_evidence_line_matches_javascript_upper_bound(self):
+        accepted = plugin(
+            "accepted", state="changed", added=["net.outbound"],
+            evidence={"net.outbound": ["Panel.qml", status.MAX_EVIDENCE_LINE]},
+        )
+        self.assertEqual(
+            status.build_status([accepted], SCANNED_AT)["plugins"][0]["evidence"]["net.outbound"]["line"],
+            status.MAX_EVIDENCE_LINE,
+        )
+        rejected = plugin(
+            "rejected", state="changed", added=["net.outbound"],
+            evidence={"net.outbound": ["Panel.qml", status.MAX_EVIDENCE_LINE + 1]},
+        )
+        with self.assertRaises(ValueError):
+            status.build_status([rejected], SCANNED_AT)
 
     def test_absolute_evidence_paths_are_reduced(self):
         document = status.build_status(

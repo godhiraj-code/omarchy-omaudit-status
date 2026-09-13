@@ -10,17 +10,19 @@ BarWidget {
   moduleName: "godhiraj.omaudit-status"
 
   property bool popupOpen: false
+  property bool popoutSwitchClosing: false
   property int selectedAction: 1
+  property string pendingExternalAction: ""
   property var waitingStatus: StatusModel.errorDocument("Waiting for Omaudit Status service")
 
   readonly property var guardService: bar?.shell?.serviceFor("godhiraj.omaudit-status")
-  readonly property var hostBarConfig: bar ? bar.barConfig : null
   readonly property var statusDocument: guardService && guardService.status
     ? guardService.status : waitingStatus
   readonly property double nowMs: guardService ? guardService.nowMs : Date.now()
   readonly property int staleAfterSec: guardService ? guardService.staleAfterSec : 1050
   readonly property bool canRefresh: !!guardService && !guardService.scanning
   readonly property bool canReview: !!guardService && statusDocument.installed !== false
+    && pendingExternalAction === ""
   readonly property string guardState: StatusModel.state(statusDocument, nowMs, staleAfterSec)
   readonly property string guardTone: StatusModel.tone(statusDocument, nowMs, staleAfterSec)
   readonly property string freshness: StatusModel.freshnessText(statusDocument,
@@ -53,13 +55,53 @@ BarWidget {
 
   function review() {
     var service = guardService
-    if (service && typeof service.review === "function") service.review()
+    if (!service || typeof service.review !== "function" || statusDocument.installed === false)
+      return false
+    return queueExternalAction("review")
   }
 
-  function open() { popupOpen = true }
+  function open() {
+    if (pendingExternalAction === "") popupOpen = true
+  }
   function close() { popupOpen = false }
-  function toggle() { popupOpen = !popupOpen }
+  function closeForPopoutSwitch() {
+    popoutSwitchClosing = true
+    close()
+    Qt.callLater(function() { root.popoutSwitchClosing = false })
+  }
+  function toggle() { popupOpen ? close() : open() }
+  function switchPanel(direction) {
+    if (bar && typeof bar.switchPanelFrom === "function")
+      return bar.switchPanelFrom(root, direction)
+    return false
+  }
   readonly property bool opened: popupOpen
+
+  function queueExternalAction(action) {
+    if (pendingExternalAction !== "") return false
+    pendingExternalAction = action
+    close()
+    externalActionDelay.restart()
+    return true
+  }
+
+  function finishExternalAction() {
+    // Do not launch under a popup reopened through direct host state.
+    if (popupOpen) {
+      close()
+      externalActionDelay.restart()
+      return
+    }
+    var action = pendingExternalAction
+    pendingExternalAction = ""
+    if (action === "review") {
+      var service = guardService
+      if (service && typeof service.review === "function" && statusDocument.installed !== false)
+        service.review()
+    } else if (action === "instructions") {
+      Qt.openUrlExternally("https://github.com/omarchy-forge/omaudit")
+    }
+  }
 
   function activateAction() {
     if (selectedAction === 0 && canRefresh) refresh()
@@ -87,7 +129,7 @@ BarWidget {
   }
 
   function installationInstructions() {
-    Qt.openUrlExternally("https://github.com/omarchy-forge/omaudit")
+    return queueExternalAction("instructions")
   }
 
   implicitWidth: vertical ? barSize : button.implicitWidth
@@ -95,7 +137,6 @@ BarWidget {
 
   onBarChanged: Qt.callLater(root.configureService)
   onSettingsChanged: Qt.callLater(root.configureService)
-  onHostBarConfigChanged: Qt.callLater(root.configureService)
   onGuardServiceChanged: Qt.callLater(root.configureService)
   onCanRefreshChanged: if (popupOpen && (selectedAction < 0 || (selectedAction === 0 && !canRefresh))) selectAction()
   onCanReviewChanged: if (popupOpen && (selectedAction < 0 || (selectedAction === 1 && !canReview))) selectAction()
@@ -105,6 +146,14 @@ BarWidget {
     Qt.callLater(root.revealAction)
   }
   Component.onCompleted: Qt.callLater(root.configureService)
+
+  // Let the layer-shell popup release keyboard focus before another
+  // application maps. Otherwise the new terminal cannot receive input.
+  Timer {
+    id: externalActionDelay
+    interval: 100
+    onTriggered: root.finishExternalAction()
+  }
 
   BarIconButton {
     id: button
@@ -139,7 +188,7 @@ BarWidget {
         if (dx !== 0 || dy !== 0) root.selectAction()
       }
       onTabRequested: function(direction) {
-        root.selectAction()
+        root.switchPanel(direction)
       }
       onActivateRequested: root.activateAction()
       onTextKey: function(text) {
